@@ -1,0 +1,23 @@
+# Build outputs
+*.iml
+.gradle/
+build/
+app/build/
+
+# Local config
+local.properties
+
+# IDE
+.idea/
+.kotlin/
+
+# OS
+.DS_Store
+
+# APK files
+*.apk
+*.aab
+
+# Keystore
+*.jks
+*.keystore
