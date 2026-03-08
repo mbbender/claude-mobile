@@ -34,7 +34,9 @@ fun ConnectScreen(
     onBiometricLogin: () -> Unit = {},
     updateInfo: UpdateInfo? = null,
     onInstallUpdate: () -> Unit = {},
-    onDismissUpdate: () -> Unit = {}
+    onDismissUpdate: () -> Unit = {},
+    autoConnectEnabled: Boolean = false,
+    onToggleAutoConnect: (Boolean) -> Unit = {}
 ) {
     var host by remember { mutableStateOf(savedConfig.host) }
     var port by remember { mutableStateOf(savedConfig.port.toString()) }
@@ -244,6 +246,24 @@ fun ConnectScreen(
                     }
                 }
             )
+        }
+
+        if (showBiometric) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Auto-connect on launch",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = autoConnectEnabled,
+                    onCheckedChange = onToggleAutoConnect
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))

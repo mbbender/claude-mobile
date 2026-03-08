@@ -58,13 +58,21 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
     val sessionCosts by viewModel.sessionCosts.collectAsState()
     val sessionModels by viewModel.sessionModels.collectAsState()
     val archivedSessions by viewModel.archivedSessions.collectAsState()
+    val sessionSummaries by viewModel.sessionSummaries.collectAsState()
+    val sessionsRefreshing by viewModel.sessionsRefreshing.collectAsState()
+    val sessionConnectionStates by viewModel.sessionConnectionStates.collectAsState()
+    val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
 
     val activity = LocalContext.current as FragmentActivity
     val biometric = viewModel.biometric
     val showBiometric = biometric.canUseBiometric && biometric.hasStoredCredentials
+    val hasLocalSessions = sessions.isNotEmpty() || archivedSessions.isNotEmpty()
 
-    // Check for updates on app launch
+    // Auto-connect on launch if enabled
     LaunchedEffect(Unit) {
+        if (autoConnectEnabled) {
+            viewModel.tryAutoConnect()
+        }
         viewModel.checkForUpdate()
     }
 
@@ -81,9 +89,15 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // Determine if we should show sessions screen even while connecting
+    // (auto-connect mode: show cached sessions immediately)
+    val autoConnectActive = autoConnectEnabled && hasLocalSessions &&
+        connectionState != ConnectionState.ERROR
+
     Crossfade(
         targetState = when {
-            connectionState != ConnectionState.CONNECTED -> "connect"
+            // Show connect screen only if not auto-connecting or if error with no local data
+            !autoConnectActive && connectionState != ConnectionState.CONNECTED -> "connect"
             isUpdating -> "updating"
             reconnecting -> "reconnecting"
             creatingSession -> "loading"
@@ -110,7 +124,9 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                     },
                     updateInfo = updateAvailable,
                     onInstallUpdate = viewModel::installUpdate,
-                    onDismissUpdate = viewModel::dismissUpdate
+                    onDismissUpdate = viewModel::dismissUpdate,
+                    autoConnectEnabled = autoConnectEnabled,
+                    onToggleAutoConnect = viewModel::setAutoConnect
                 )
             }
             "updating" -> {
@@ -160,7 +176,15 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                     sessionTokens = sessionTokens,
                     sessionCosts = sessionCosts,
                     sessionModels = sessionModels,
-                    archivedSessions = archivedSessions
+                    archivedSessions = archivedSessions,
+                    sessionSummaries = sessionSummaries,
+                    waitingSessions = waitingSessions,
+                    sessionErrors = sessionErrors,
+                    sessionsRefreshing = sessionsRefreshing,
+                    sessionConnectionStates = sessionConnectionStates,
+                    sshConnectionState = connectionState,
+                    autoConnectEnabled = autoConnectEnabled,
+                    onToggleAutoConnect = viewModel::setAutoConnect
                 )
             }
         }

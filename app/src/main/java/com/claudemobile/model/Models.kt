@@ -8,11 +8,19 @@ data class SshConfig(
     val keyPath: String = ""
 )
 
+enum class SessionConnectionState {
+    DISCONNECTED,
+    RECONNECTING,
+    CONNECTED
+}
+
 data class ClaudeSession(
     val name: String,
     val isRunning: Boolean,
     val windowId: String = "",
-    val lastOutput: String = ""
+    val lastOutput: String = "",
+    val serverHost: String = "",
+    val serverUsername: String = ""
 )
 
 enum class ClaudeModel(val id: String, val displayName: String) {
