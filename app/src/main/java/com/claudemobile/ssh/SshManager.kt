@@ -7,6 +7,8 @@ import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.util.Properties
@@ -20,6 +22,7 @@ class SshManager {
     private var lastConfig: SshConfig? = null
     private val jsch = JSch()
     private var identityAdded = false
+    private val execMutex = Mutex()
 
     val isConnected: Boolean get() = session?.isConnected == true
 
@@ -71,34 +74,36 @@ class SshManager {
     }
 
     suspend fun exec(command: String): String = withContext(Dispatchers.IO) {
-        ensureConnected()
-        val s = session ?: throw IllegalStateException("Not connected")
-        val channel = try {
-            s.openChannel("exec") as ChannelExec
-        } catch (e: Exception) {
-            // Channel open failed — try reconnect once
-            if (reconnect()) {
-                val s2 = session ?: throw IllegalStateException("Not connected")
-                s2.openChannel("exec") as ChannelExec
-            } else {
-                throw e
+        execMutex.withLock {
+            ensureConnected()
+            val s = session ?: throw IllegalStateException("Not connected")
+            val channel = try {
+                s.openChannel("exec") as ChannelExec
+            } catch (e: Exception) {
+                // Channel open failed — try reconnect once
+                if (reconnect()) {
+                    val s2 = session ?: throw IllegalStateException("Not connected")
+                    s2.openChannel("exec") as ChannelExec
+                } else {
+                    throw e
+                }
             }
-        }
-        val output = ByteArrayOutputStream()
-        val errOutput = ByteArrayOutputStream()
-        channel.outputStream = output
-        channel.setErrStream(errOutput)
-        channel.setCommand("/bin/bash -lc ${shellEscape(command)}")
-        channel.connect(15_000)
+            val output = ByteArrayOutputStream()
+            val errOutput = ByteArrayOutputStream()
+            channel.outputStream = output
+            channel.setErrStream(errOutput)
+            channel.setCommand("/bin/bash -lc ${shellEscape(command)}")
+            channel.connect(15_000)
 
-        while (!channel.isClosed) {
-            Thread.sleep(100)
-        }
-        channel.disconnect()
+            while (!channel.isClosed) {
+                Thread.sleep(100)
+            }
+            channel.disconnect()
 
-        val result = output.toString("UTF-8")
-        val err = errOutput.toString("UTF-8")
-        if (result.isBlank() && err.isNotBlank()) err else result
+            val result = output.toString("UTF-8")
+            val err = errOutput.toString("UTF-8")
+            if (result.isBlank() && err.isNotBlank()) err else result
+        }
     }
 
     suspend fun listSessions(): List<ClaudeSession> = withContext(Dispatchers.IO) {
@@ -295,7 +300,9 @@ WORKEREOF""")
     suspend fun sendMobileMessage(sessionName: String, message: String) = withContext(Dispatchers.IO) {
         val dir = "/tmp/claude-mobile/$sessionName"
         val escaped = message.replace("'", "'\\''")
-        exec("echo '$escaped' > '$dir/pending'")
+        // Clear old response and set status to "pending" BEFORE writing pending file
+        // This closes the race window where status is still "ready" from the previous turn
+        exec("rm -f '$dir/response' '$dir/raw_response'; echo 'pending' > '$dir/status'; echo '$escaped' > '$dir/pending'")
     }
 
     suspend fun resolveDataDir(sessionName: String): String = withContext(Dispatchers.IO) {
@@ -320,6 +327,22 @@ WORKEREOF""")
             exec("cat /tmp/claude-mobile/$sessionName/status 2>/dev/null").trim()
         } catch (e: Exception) {
             "unknown"
+        }
+    }
+
+    suspend fun getAllSessionStatuses(sessionNames: List<String>): Map<String, String> = withContext(Dispatchers.IO) {
+        if (sessionNames.isEmpty()) return@withContext emptyMap()
+        try {
+            val cmd = sessionNames.joinToString("; ") { name ->
+                "echo \"$name:\$(cat /tmp/claude-mobile/$name/status 2>/dev/null || echo unknown)\""
+            }
+            val raw = exec(cmd)
+            raw.lines().filter { it.contains(":") }.associate { line ->
+                val parts = line.split(":", limit = 2)
+                parts[0] to (parts.getOrNull(1)?.trim() ?: "unknown")
+            }
+        } catch (_: Exception) {
+            emptyMap()
         }
     }
 

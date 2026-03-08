@@ -2,6 +2,8 @@ package com.claudemobile.ui.screens
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -62,11 +64,13 @@ fun ReconnectLoadingScreen() {
 }
 
 @Composable
-fun UpdateLoadingScreen() {
+fun UpdateLoadingScreen(downloadProgress: Float = -1f) {
     LoadingScreenContent(
         messages = updateMessages,
         icon = "\u2B06",
-        subtitle = "Downloading update"
+        subtitle = "Downloading update",
+        showProgress = true,
+        progress = downloadProgress
     )
 }
 
@@ -83,7 +87,9 @@ fun SessionLoadingScreen() {
 private fun LoadingScreenContent(
     messages: List<String>,
     icon: String,
-    subtitle: String
+    subtitle: String,
+    showProgress: Boolean = false,
+    progress: Float = -1f
 ) {
     val message = remember { messages.random() }
 
@@ -163,6 +169,37 @@ private fun LoadingScreenContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
+
+        if (showProgress) {
+            Spacer(modifier = Modifier.height(24.dp))
+            if (progress in 0f..1f) {
+                val animatedProgress by animateFloatAsState(
+                    targetValue = progress,
+                    animationSpec = tween(300),
+                    label = "downloadProgress"
+                )
+                Box(contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        progress = { animatedProgress },
+                        modifier = Modifier.size(48.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 4.dp,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    Text(
+                        text = "${(progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+            } else {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(36.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 3.dp
+                )
+            }
+        }
     }
 }
 

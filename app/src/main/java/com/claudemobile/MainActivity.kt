@@ -70,6 +70,7 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
     val snackMessage by viewModel.snackMessage.collectAsState()
     val checkingUpdate by viewModel.checkingUpdate.collectAsState()
     val isUpdating by viewModel.isUpdating.collectAsState()
+    val downloadProgress by viewModel.updater.downloadProgress.collectAsState()
     val reconnecting by viewModel.reconnecting.collectAsState()
     val waitingSessions by viewModel.waitingSessions.collectAsState()
     val sessionErrors by viewModel.sessionErrors.collectAsState()
@@ -151,7 +152,7 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                 )
             }
             "updating" -> {
-                UpdateLoadingScreen()
+                UpdateLoadingScreen(downloadProgress = downloadProgress)
             }
             "reconnecting" -> {
                 ReconnectLoadingScreen()

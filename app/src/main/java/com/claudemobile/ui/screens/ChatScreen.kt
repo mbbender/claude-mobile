@@ -49,6 +49,7 @@ fun ChatScreen(
     errorMessage: String? = null,
     model: ClaudeModel? = null,
     readOnly: Boolean = false,
+    isPending: Boolean = false,
     onSendMessage: (String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -139,7 +140,9 @@ fun ChatScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    if (readOnly) "No history available" else "Send a message to start",
+                    if (readOnly) "No history available"
+                    else if (isPending) "How can I help?"
+                    else "Send a message to start",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

@@ -12,8 +12,8 @@ android {
         applicationId = "com.claudemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 41
-        versionName = "2.25"
+        versionCode = 71
+        versionName = "2.55"
     }
 
     buildTypes {

@@ -10,7 +10,13 @@ import android.os.Build
 import android.os.Environment
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -22,7 +28,10 @@ data class UpdateInfo(
     val url: String
 )
 
-class UpdateManager(private val context: Context) {
+class UpdateManager(private val context: Context, private val scope: CoroutineScope) {
+
+    private val _downloadProgress = MutableStateFlow(-1f) // -1 = not downloading
+    val downloadProgress: StateFlow<Float> = _downloadProgress.asStateFlow()
 
     companion object {
         private const val VERSION_URL = "http://100.110.253.52:8888/claude-mobile-version.json"
@@ -79,11 +88,38 @@ class UpdateManager(private val context: Context) {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val downloadId = dm.enqueue(request)
 
+        _downloadProgress.value = 0f
+
+        // Poll download progress
+        scope.launch(Dispatchers.IO) {
+            var done = false
+            while (!done) {
+                val query = DownloadManager.Query().setFilterById(downloadId)
+                dm.query(query)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                        if (status == DownloadManager.STATUS_SUCCESSFUL || status == DownloadManager.STATUS_FAILED) {
+                            done = true
+                            _downloadProgress.value = if (status == DownloadManager.STATUS_SUCCESSFUL) 1f else -1f
+                        } else {
+                            val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                            val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                            if (total > 0) {
+                                _downloadProgress.value = downloaded.toFloat() / total.toFloat()
+                            }
+                        }
+                    }
+                }
+                if (!done) delay(200)
+            }
+        }
+
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
                 if (id == downloadId) {
                     context.unregisterReceiver(this)
+                    _downloadProgress.value = -1f
                     onComplete()
                     installApk(apkFile)
                 }

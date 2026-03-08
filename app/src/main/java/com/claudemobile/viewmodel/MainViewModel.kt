@@ -743,18 +743,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun killSession(sessionName: String) {
         // Clean up local state immediately regardless of SSH
-        _sessions.value = _sessions.value.filter { it.name != sessionName }
-        _chatMessages.value = _chatMessages.value - sessionName
-        deletePersistedMessages(sessionName)
-        _sessionConnectionStates.value = _sessionConnectionStates.value - sessionName
-        activatedSessions.remove(sessionName)
-        messageCount.remove(sessionName)
-        val dataDir = dataDirNames.remove(sessionName)
-        _sessionTokens.value = _sessionTokens.value - sessionName
-        _sessionCosts.value = _sessionCosts.value - sessionName
-        _sessionModels.value = _sessionModels.value - sessionName
-        _displayNames.value = _displayNames.value - sessionName
-        if (_currentSession.value == sessionName) {
+        val dataDir = dataDirNames[sessionName]
+        // Remove both the display name AND any session with matching data dir
+        val relatedNames = if (dataDir != null) {
+            dataDirNames.filter { it.value == dataDir }.keys + sessionName
+        } else setOf(sessionName)
+
+        _sessions.value = _sessions.value.filter { it.name !in relatedNames }
+        for (name in relatedNames) {
+            _chatMessages.value = _chatMessages.value - name
+            deletePersistedMessages(name)
+            _sessionConnectionStates.value = _sessionConnectionStates.value - name
+            activatedSessions.remove(name)
+            messageCount.remove(name)
+            dataDirNames.remove(name)
+            _sessionTokens.value = _sessionTokens.value - name
+            _sessionCosts.value = _sessionCosts.value - name
+            _sessionModels.value = _sessionModels.value - name
+            _displayNames.value = _displayNames.value - name
+        }
+        if (_currentSession.value in relatedNames) {
             _currentSession.value = null
         }
         saveActiveSessions()
@@ -771,10 +779,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun archiveSession(sessionName: String) {
         val dataDir = dataDirNames[sessionName]
         _archivedSessions.value = _archivedSessions.value + sessionName
-        _sessions.value = _sessions.value.filter { it.name != sessionName }
-        _sessionConnectionStates.value = _sessionConnectionStates.value - sessionName
-        activatedSessions.remove(sessionName)
-        dataDirNames.remove(sessionName)
+
+        // Remove both the display name AND any session with matching data dir (original name)
+        val relatedNames = dataDirNames.filter { it.value == dataDir }.keys + sessionName
+        _sessions.value = _sessions.value.filter { it.name !in relatedNames }
+        for (name in relatedNames) {
+            _sessionConnectionStates.value = _sessionConnectionStates.value - name
+            activatedSessions.remove(name)
+            dataDirNames.remove(name)
+            if (name != sessionName) {
+                // Clean up orphaned entries for the original name
+                _chatMessages.value = _chatMessages.value - name
+                deletePersistedMessages(name)
+                _sessionTokens.value = _sessionTokens.value - name
+                _sessionCosts.value = _sessionCosts.value - name
+                _sessionModels.value = _sessionModels.value - name
+            }
+        }
         if (_currentSession.value == sessionName) {
             _currentSession.value = null
         }
