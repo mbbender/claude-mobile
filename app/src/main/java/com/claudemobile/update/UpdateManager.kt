@@ -34,13 +34,26 @@ class UpdateManager(private val context: Context, private val scope: CoroutineSc
     val downloadProgress: StateFlow<Float> = _downloadProgress.asStateFlow()
 
     companion object {
-        private const val VERSION_URL = "http://100.110.253.52:8888/claude-mobile-version.json"
+        private const val VERSION_URL_KEY = "update_server_url"
+        private const val DEFAULT_VERSION_PATH = "/claude-mobile-version.json"
         private const val APK_FILENAME = "claude-mobile-update.apk"
+
+        fun getVersionUrl(context: Context): String {
+            val prefs = context.getSharedPreferences("update_prefs", Context.MODE_PRIVATE)
+            val baseUrl = prefs.getString(VERSION_URL_KEY, null)
+            return if (baseUrl != null) "$baseUrl$DEFAULT_VERSION_PATH"
+            else "http://localhost:8888$DEFAULT_VERSION_PATH"
+        }
+
+        fun setUpdateServer(context: Context, url: String) {
+            context.getSharedPreferences("update_prefs", Context.MODE_PRIVATE)
+                .edit().putString(VERSION_URL_KEY, url).apply()
+        }
     }
 
     suspend fun checkForUpdate(): UpdateInfo? = withContext(Dispatchers.IO) {
         try {
-            val conn = URL(VERSION_URL).openConnection() as HttpURLConnection
+            val conn = URL(getVersionUrl(context)).openConnection() as HttpURLConnection
             conn.connectTimeout = 5000
             conn.readTimeout = 5000
             conn.useCaches = false
