@@ -462,7 +462,7 @@ private fun SessionCard(
                             val costStr = if (cost != null && cost > 0) " · $${"%.2f".format(cost)}" else ""
                             "$modelTag · $formatted tokens$costStr"
                         } else {
-                            "$modelTag · ${session.windowId} · ${session.lastOutput}"
+                            modelTag
                         }
                     }
                 }

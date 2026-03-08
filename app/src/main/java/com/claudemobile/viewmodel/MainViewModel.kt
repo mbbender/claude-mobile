@@ -25,7 +25,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val appContext = app.applicationContext
     private val sessionsDir = File(app.filesDir, "sessions").also { it.mkdirs() }
     val biometric = BiometricHelper(app)
-    val updater = UpdateManager(app)
+    val updater = UpdateManager(app, viewModelScope)
 
     private val _updateAvailable = MutableStateFlow<UpdateInfo?>(null)
     val updateAvailable: StateFlow<UpdateInfo?> = _updateAvailable.asStateFlow()
@@ -335,8 +335,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             for (session in toReconnect) {
                 if (!isActive) break
 
-                // Skip if already has messages loaded
-                if (_chatMessages.value[session.name]?.isNotEmpty() == true) continue
+                // Skip if already reconnected this launch (has a dataDir entry)
+                if (session.name in dataDirNames) continue
 
                 _sessionConnectionStates.value = _sessionConnectionStates.value +
                     (session.name to SessionConnectionState.RECONNECTING)
