@@ -216,8 +216,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 reconnectSessionsSequentially()
                 checkForUpdate()
             } catch (e: Exception) {
-                _connectionState.value = ConnectionState.ERROR
-                _errorMessage.value = e.message ?: "Connection failed"
+                // Auto-connect failed — fall back to connect screen silently
+                _connectionState.value = ConnectionState.DISCONNECTED
+                _autoConnect.value = false
                 stopConnectionService()
             }
         }
