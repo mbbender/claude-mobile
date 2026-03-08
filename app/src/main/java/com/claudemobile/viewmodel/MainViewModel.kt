@@ -2,10 +2,12 @@ package com.claudemobile.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.claudemobile.model.*
 import com.claudemobile.ssh.BiometricHelper
+import com.claudemobile.ssh.SshConnectionService
 import com.claudemobile.ssh.SshManager
 import com.claudemobile.update.UpdateInfo
 import com.claudemobile.update.UpdateManager
@@ -20,6 +22,7 @@ import java.io.File
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val ssh = SshManager()
     private val prefs = app.getSharedPreferences("claude_mobile", Context.MODE_PRIVATE)
+    private val appContext = app.applicationContext
     private val sessionsDir = File(app.filesDir, "sessions").also { it.mkdirs() }
     val biometric = BiometricHelper(app)
     val updater = UpdateManager(app)
@@ -140,6 +143,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: ""
     } catch (_: Exception) { "" }
 
+    private fun startConnectionService(status: String = "Connected") {
+        try {
+            val intent = Intent(appContext, SshConnectionService::class.java)
+            appContext.startForegroundService(intent)
+            updateConnectionServiceStatus(status)
+        } catch (_: Exception) {}
+    }
+
+    private fun stopConnectionService() {
+        try {
+            val intent = Intent(appContext, SshConnectionService::class.java).apply {
+                action = SshConnectionService.ACTION_STOP
+            }
+            appContext.startService(intent)
+        } catch (_: Exception) {}
+    }
+
+    private fun updateConnectionServiceStatus(status: String) {
+        try {
+            val intent = Intent(appContext, SshConnectionService::class.java).apply {
+                action = SshConnectionService.ACTION_UPDATE_STATUS
+                putExtra(SshConnectionService.EXTRA_STATUS, status)
+            }
+            appContext.startService(intent)
+        } catch (_: Exception) {}
+    }
+
     val savedConfig: SshConfig
         get() = SshConfig(
             host = prefs.getString("host", "") ?: "",
@@ -177,6 +207,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _connectionState.value = ConnectionState.CONNECTED
                 val hostname = ssh.getHostname()
                 _connectionLabel.value = "${config.username}@$hostname"
+                startConnectionService("${config.username}@$hostname")
 
                 // Merge live tmux sessions with local cache
                 refreshAndMergeSessions(config)
@@ -187,6 +218,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 _connectionState.value = ConnectionState.ERROR
                 _errorMessage.value = e.message ?: "Connection failed"
+                stopConnectionService()
             }
         }
     }
@@ -213,6 +245,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val hostname = ssh.getHostname()
                 _connectionLabel.value = "${config.username}@$hostname"
+                startConnectionService("${config.username}@$hostname")
 
                 // Enable auto-connect after first successful manual connect
                 setAutoConnect(true)
@@ -224,6 +257,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 _connectionState.value = ConnectionState.ERROR
                 _errorMessage.value = e.message ?: "Connection failed"
+                stopConnectionService()
             }
         }
     }
@@ -239,6 +273,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pollJob?.cancel()
         reconnectJob?.cancel()
         ssh.disconnect()
+        stopConnectionService()
         _connectionState.value = ConnectionState.DISCONNECTED
         // Mark all sessions as disconnected but keep them in the list
         val allDisconnected = _sessionConnectionStates.value.mapValues { SessionConnectionState.DISCONNECTED }
@@ -1177,6 +1212,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         super.onCleared()
         saveActiveSessions()
+        stopConnectionService()
         ssh.disconnect()
     }
 }
