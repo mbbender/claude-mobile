@@ -49,9 +49,17 @@ class SshManager {
         }
     }
 
+    /** Public reconnect — acquires the exec mutex to avoid racing with in-flight commands. */
     suspend fun reconnect(): Boolean = withContext(Dispatchers.IO) {
-        val config = lastConfig ?: return@withContext false
-        try {
+        execMutex.withLock {
+            reconnectInternal()
+        }
+    }
+
+    /** Internal reconnect — caller must already hold execMutex. */
+    private suspend fun reconnectInternal(): Boolean {
+        val config = lastConfig ?: return false
+        return try {
             disconnect()
             connect(config)
             true
@@ -62,7 +70,7 @@ class SshManager {
 
     private suspend fun ensureConnected() {
         if (session?.isConnected != true) {
-            if (!reconnect()) {
+            if (!reconnectInternal()) {
                 throw IllegalStateException("Not connected")
             }
         }
@@ -81,7 +89,7 @@ class SshManager {
                 s.openChannel("exec") as ChannelExec
             } catch (e: Exception) {
                 // Channel open failed — try reconnect once
-                if (reconnect()) {
+                if (reconnectInternal()) {
                     val s2 = session ?: throw IllegalStateException("Not connected")
                     s2.openChannel("exec") as ChannelExec
                 } else {
