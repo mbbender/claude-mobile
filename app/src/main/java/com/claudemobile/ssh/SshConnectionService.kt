@@ -19,7 +19,13 @@ class SshConnectionService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Connected"))
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification("Connected"))
+        } catch (e: Exception) {
+            // Permission not granted — run without foreground (will be killed by OS eventually)
+            stopSelf()
+            return
+        }
         acquireWakeLock()
     }
 
