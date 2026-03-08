@@ -138,6 +138,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
 
     fun connect(config: SshConfig) {
+        pollJob?.cancel()
         _connectionState.value = ConnectionState.CONNECTING
         _errorMessage.value = null
 
@@ -179,6 +180,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun reconnect() {
         val config = savedConfig
         if (config.host.isNotBlank()) {
+            pollJob?.cancel()
             // Silently reconnect without changing connectionState to CONNECTING,
             // which would briefly show ConnectScreen and re-trigger biometric
             _sessionsRefreshing.value = true
