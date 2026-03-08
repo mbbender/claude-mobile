@@ -257,7 +257,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 checkForUpdate()
             } catch (e: Exception) {
                 _connectionState.value = ConnectionState.ERROR
-                _errorMessage.value = e.message ?: "Connection failed"
+                val authMethod = if (config.keyPath.isNotBlank()) "key:${config.keyPath}" else "password"
+                _errorMessage.value = "${e.message} [${config.username}@${config.host}:${config.port} via $authMethod]"
                 stopConnectionService()
             }
         }
