@@ -61,6 +61,7 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
     val sessionSummaries by viewModel.sessionSummaries.collectAsState()
     val sessionsRefreshing by viewModel.sessionsRefreshing.collectAsState()
     val sessionConnectionStates by viewModel.sessionConnectionStates.collectAsState()
+    val pendingSessions by viewModel.pendingSessions.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
 
     val activity = LocalContext.current as FragmentActivity
@@ -76,13 +77,14 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
         viewModel.checkForUpdate()
     }
 
-    // Reconnect SSH when app resumes from background
+    // Pause polling when backgrounded, resume when foregrounded
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME &&
-                connectionState == ConnectionState.CONNECTED) {
-                viewModel.reconnect()
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> viewModel.onAppForeground()
+                Lifecycle.Event.ON_PAUSE -> viewModel.onAppBackground()
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -148,6 +150,7 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                     errorMessage = sessionErrors[session],
                     model = sessionModels[session],
                     readOnly = session in archivedSessions,
+                    isPending = session in pendingSessions,
                     onSendMessage = { viewModel.sendMessage(session, it) },
                     onBack = { viewModel.clearCurrentSession() }
                 )

@@ -932,6 +932,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _errorMessage.value = null
     }
 
+    fun onAppForeground() {
+        if (_connectionState.value == ConnectionState.CONNECTED) {
+            startPolling()
+            refreshSessions()
+        }
+    }
+
+    fun onAppBackground() {
+        pollJob?.cancel()
+        pollJob = null
+    }
+
     private suspend fun pollSessionOutput(sessionName: String) {
         // No-op for background polling — responses are captured in waitForResponse
     }
