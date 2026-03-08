@@ -21,13 +21,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.claudemobile.model.ChatMessage
@@ -42,6 +48,7 @@ fun ChatScreen(
     isWaiting: Boolean = false,
     errorMessage: String? = null,
     model: ClaudeModel? = null,
+    readOnly: Boolean = false,
     onSendMessage: (String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -77,46 +84,48 @@ fun ChatScreen(
             )
         },
         bottomBar = {
-            Surface(
-                tonalElevation = 3.dp,
-                shadowElevation = 8.dp
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp)
-                        .imePadding(),
-                    verticalAlignment = Alignment.Bottom
+            if (!readOnly) {
+                Surface(
+                    tonalElevation = 3.dp,
+                    shadowElevation = 8.dp
                 ) {
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Message Claude...") },
-                        maxLines = 5,
-                        shape = RoundedCornerShape(24.dp),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(
-                            onSend = {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp)
+                            .imePadding(),
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        OutlinedTextField(
+                            value = input,
+                            onValueChange = { input = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("Message Claude...") },
+                            maxLines = 5,
+                            shape = RoundedCornerShape(24.dp),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(
+                                onSend = {
+                                    if (input.isNotBlank()) {
+                                        onSendMessage(input.trim())
+                                        input = ""
+                                    }
+                                }
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        FilledIconButton(
+                            onClick = {
                                 if (input.isNotBlank()) {
                                     onSendMessage(input.trim())
                                     input = ""
                                 }
-                            }
-                        )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    FilledIconButton(
-                        onClick = {
-                            if (input.isNotBlank()) {
-                                onSendMessage(input.trim())
-                                input = ""
-                            }
-                        },
-                        enabled = input.isNotBlank(),
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                            },
+                            enabled = input.isNotBlank(),
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                        }
                     }
                 }
             }
@@ -130,7 +139,7 @@ fun ChatScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "Send a message to start",
+                    if (readOnly) "No history available" else "Send a message to start",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -309,6 +318,13 @@ private fun ChatBubble(message: ChatMessage) {
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
         )
 
+        val codeBackground = if (isUser) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+        }
+        val styledText = parseMarkdown(message.content, codeBackground)
+
         Box(
             modifier = Modifier
                 .widthIn(max = 320.dp)
@@ -324,15 +340,22 @@ private fun ChatBubble(message: ChatMessage) {
                 .background(bubbleColor)
                 .padding(12.dp)
         ) {
-            Text(
-                text = if (showCopied) "Copied!" else message.content,
-                color = textColor,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = if (!isUser) FontFamily.Monospace else FontFamily.Default,
-                    fontSize = if (!isUser) 13.sp else 14.sp,
-                    lineHeight = 20.sp
+            if (showCopied) {
+                Text(
+                    text = "Copied!",
+                    color = textColor,
+                    style = MaterialTheme.typography.bodyMedium
                 )
-            )
+            } else {
+                Text(
+                    text = styledText,
+                    color = textColor,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = if (!isUser) 13.sp else 14.sp,
+                        lineHeight = 20.sp
+                    )
+                )
+            }
         }
 
         if (showCopied) {
@@ -345,3 +368,51 @@ private fun ChatBubble(message: ChatMessage) {
 }
 
 private val EaseInOutCubic: Easing = CubicBezierEasing(0.65f, 0f, 0.35f, 1f)
+
+private data class MarkdownToken(val start: Int, val end: Int, val contentStart: Int, val contentEnd: Int, val style: SpanStyle)
+
+private fun parseMarkdown(text: String, codeColor: androidx.compose.ui.graphics.Color): AnnotatedString {
+    val tokens = mutableListOf<MarkdownToken>()
+    val patterns = listOf(
+        Regex("""`([^`]+)`""") to SpanStyle(fontFamily = FontFamily.Monospace, background = codeColor),
+        Regex("""\*\*(.+?)\*\*""") to SpanStyle(fontWeight = FontWeight.Bold),
+        Regex("""__(.+?)__""") to SpanStyle(textDecoration = TextDecoration.Underline),
+        Regex("""\*(.+?)\*""") to SpanStyle(fontStyle = FontStyle.Italic),
+        Regex("""_(.+?)_""") to SpanStyle(fontStyle = FontStyle.Italic),
+    )
+
+    for ((regex, style) in patterns) {
+        for (match in regex.findAll(text)) {
+            val overlaps = tokens.any { existing ->
+                match.range.first < existing.end && match.range.last + 1 > existing.start
+            }
+            if (!overlaps) {
+                tokens.add(MarkdownToken(
+                    start = match.range.first,
+                    end = match.range.last + 1,
+                    contentStart = match.groups[1]!!.range.first,
+                    contentEnd = match.groups[1]!!.range.last + 1,
+                    style = style
+                ))
+            }
+        }
+    }
+
+    tokens.sortBy { it.start }
+
+    return buildAnnotatedString {
+        var cursor = 0
+        for (token in tokens) {
+            if (cursor < token.start) {
+                append(text.substring(cursor, token.start))
+            }
+            withStyle(token.style) {
+                append(text.substring(token.contentStart, token.contentEnd))
+            }
+            cursor = token.end
+        }
+        if (cursor < text.length) {
+            append(text.substring(cursor))
+        }
+    }
+}

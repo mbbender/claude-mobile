@@ -9,7 +9,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.claudemobile.model.ConnectionState
 import com.claudemobile.ui.screens.ChatScreen
@@ -65,6 +68,19 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
         viewModel.checkForUpdate()
     }
 
+    // Reconnect SSH when app resumes from background
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME &&
+                connectionState == ConnectionState.CONNECTED) {
+                viewModel.reconnect()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Crossfade(
         targetState = when {
             connectionState != ConnectionState.CONNECTED -> "connect"
@@ -115,6 +131,7 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                     isWaiting = session in waitingSessions,
                     errorMessage = sessionErrors[session],
                     model = sessionModels[session],
+                    readOnly = session in archivedSessions,
                     onSendMessage = { viewModel.sendMessage(session, it) },
                     onBack = { viewModel.clearCurrentSession() }
                 )
@@ -123,11 +140,11 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                 SessionsScreen(
                     sessions = sessions,
                     onSessionClick = viewModel::selectSession,
-                    onQuickNewInteractive = { model -> viewModel.quickCreateInteractiveSession(model) },
-                    onNewInteractive = { name, model -> viewModel.createInteractiveSession(name, model) },
-                    onNewTask = { name, prompt, model -> viewModel.createTaskSession(name, prompt, model) },
+                    onQuickNewInteractive = { viewModel.quickCreateInteractiveSession() },
+                    onNewInteractive = { name -> viewModel.createInteractiveSession(name) },
                     onKillSession = viewModel::killSession,
                     onArchiveSession = viewModel::archiveSession,
+                    onArchivedSessionClick = viewModel::viewArchivedSession,
                     onDismissArchived = viewModel::dismissArchivedSession,
                     onRenameSession = viewModel::renameSessionManual,
                     onRefresh = viewModel::refreshSessions,

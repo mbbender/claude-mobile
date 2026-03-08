@@ -83,6 +83,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Track user message count per session for auto-rename
     private val messageCount = mutableMapOf<String, Int>()
 
+    // Track one-shot sessions that auto-archive after first response
+    private val oneShotSessions = mutableSetOf<String>()
+
     // Display names that differ from tmux session names
     private val _displayNames = MutableStateFlow<Map<String, String>>(emptyMap())
     val displayNames: StateFlow<Map<String, String>> = _displayNames.asStateFlow()
@@ -141,6 +144,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun reconnect() {
+        val config = savedConfig
+        if (config.host.isNotBlank()) {
+            connect(config)
+        }
+    }
+
     fun disconnect() {
         pollJob?.cancel()
         ssh.disconnect()
@@ -162,10 +172,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun quickCreateInteractiveSession(model: com.claudemobile.model.ClaudeModel = com.claudemobile.model.ClaudeModel.OPUS) {
+    fun quickCreateInteractiveSession() {
         val num = sessionCounter.incrementAndGet()
         val tempName = "session-$num"
-        createInteractiveSession(tempName, model)
+        createInteractiveSession(tempName)
     }
 
     fun createInteractiveSession(name: String, model: com.claudemobile.model.ClaudeModel = com.claudemobile.model.ClaudeModel.OPUS) {
@@ -187,25 +197,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun createTaskSession(name: String, prompt: String, model: com.claudemobile.model.ClaudeModel = com.claudemobile.model.ClaudeModel.OPUS) {
-        _creatingSession.value = true
-        viewModelScope.launch {
-            try {
-                val sessionName = ssh.createSession(name, prompt, model)
-                activatedSessions.add(sessionName)
-                _sessionModels.value = _sessionModels.value + (sessionName to model)
-                val msg = ChatMessage(content = prompt, isUser = true)
-                _chatMessages.value = _chatMessages.value + (sessionName to listOf(msg))
-                messageCount[sessionName] = 1
-                refreshSessions()
-                _currentSession.value = sessionName
-            } catch (e: Exception) {
-                _errorMessage.value = "Failed to create task: ${e.message}"
-            } finally {
-                _creatingSession.value = false
-            }
-        }
-    }
+
 
     fun selectSession(name: String) {
         val hasMessages = _chatMessages.value[name]?.isNotEmpty() == true
@@ -259,6 +251,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun sendMessage(sessionName: String, message: String) {
         viewModelScope.launch {
             try {
+                val count = messageCount[sessionName] ?: 0
+                val intent = if (count == 0) parseMessageIntent(message) else MessageIntent(message, null, false)
+                val actualMessage = intent.cleanMessage
+
+                // Handle model override on first message
+                if (count == 0 && intent.model != null) {
+                    val dataDir = dataDirNames[sessionName]
+                    if (dataDir != null) {
+                        // Restart session with the requested model
+                        ssh.killSession(sessionName, dataDir)
+                        val newName = ssh.startInteractiveSession(sessionName, intent.model)
+                        dataDirNames[newName] = newName
+                        _sessionModels.value = _sessionModels.value + (sessionName to intent.model)
+                    }
+                }
+
+                // Track one-shot sessions
+                if (intent.isOneShot) {
+                    oneShotSessions.add(sessionName)
+                }
+
                 val current = _chatMessages.value[sessionName].orEmpty()
                 val newMsg = ChatMessage(content = message, isUser = true)
                 _chatMessages.value = _chatMessages.value + (sessionName to current + newMsg)
@@ -270,12 +283,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     dataDir = ssh.resolveDataDir(sessionName)
                     dataDirNames[sessionName] = dataDir
                 }
-                ssh.sendMobileMessage(dataDir, message)
+                ssh.sendMobileMessage(dataDir, actualMessage)
                 _waitingSessions.value = _waitingSessions.value + sessionName
                 _sessionErrors.value = _sessionErrors.value - sessionName
 
-                val count = (messageCount[sessionName] ?: 0) + 1
-                messageCount[sessionName] = count
+                messageCount[sessionName] = count + 1
 
                 // Auto-rename after 1st message
                 if (count == 1) {
@@ -353,6 +365,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (tokens > 0) _sessionTokens.value = _sessionTokens.value + (currentName to tokens)
                 if (cost > 0) _sessionCosts.value = _sessionCosts.value + (currentName to cost)
                 _waitingSessions.value = _waitingSessions.value - currentName - originalSessionName
+
+                // Auto-archive one-shot sessions after response
+                if (currentName in oneShotSessions || originalSessionName in oneShotSessions) {
+                    oneShotSessions.remove(currentName)
+                    oneShotSessions.remove(originalSessionName)
+                    delay(2000) // Brief delay so user can see the response
+                    archiveSession(currentName)
+                }
                 return
             }
 
@@ -397,6 +417,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (activatedSessions.remove(sessionName)) {
                         activatedSessions.add(newName)
                     }
+                    if (oneShotSessions.remove(sessionName)) {
+                        oneShotSessions.add(newName)
+                    }
                     messageCount[newName] = messageCount.remove(sessionName) ?: 0
                     // Transfer data dir mapping: new display name → same original data dir
                     val originalDir = dataDirNames.remove(sessionName) ?: sessionName
@@ -435,6 +458,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             ""
         }
+    }
+
+    private data class MessageIntent(
+        val cleanMessage: String,
+        val model: com.claudemobile.model.ClaudeModel?,
+        val isOneShot: Boolean
+    )
+
+    private fun parseMessageIntent(message: String): MessageIntent {
+        var clean = message
+        var model: com.claudemobile.model.ClaudeModel? = null
+        var isOneShot = false
+
+        // Check for model overrides
+        val sonnetPattern = Regex("\\b(use|with|using|in)\\s+sonnet\\b", RegexOption.IGNORE_CASE)
+        if (sonnetPattern.containsMatchIn(clean)) {
+            model = com.claudemobile.model.ClaudeModel.SONNET
+            clean = sonnetPattern.replace(clean, "").trim()
+        }
+
+        // Check for one-shot/task keywords
+        val oneShotPattern = Regex("\\b(one[- ]?shot|as a task|run (this )?as (a )?task)\\b", RegexOption.IGNORE_CASE)
+        if (oneShotPattern.containsMatchIn(clean)) {
+            isOneShot = true
+            clean = oneShotPattern.replace(clean, "").trim()
+        }
+
+        // Clean up extra spaces from stripping
+        clean = clean.replace(Regex("\\s{2,}"), " ").trim()
+        // Remove leading/trailing punctuation artifacts
+        clean = clean.replace(Regex("^[,.:;]+\\s*"), "").replace(Regex("\\s*[,.:;]+$"), "").trim()
+
+        return MessageIntent(clean, model, isOneShot)
     }
 
     fun killSession(sessionName: String) {
@@ -500,6 +556,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } catch (_: Exception) {}
         }
+    }
+
+    fun viewArchivedSession(sessionName: String) {
+        // Just open the chat screen with existing messages — no SSH reconnect needed
+        _currentSession.value = sessionName
     }
 
     fun dismissArchivedSession(sessionName: String) {
@@ -601,8 +662,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // No-op for background polling — responses are captured in waitForResponse
     }
 
+    private var consecutivePollFailures = 0
+
     private fun startPolling() {
         pollJob?.cancel()
+        consecutivePollFailures = 0
         pollJob = viewModelScope.launch {
             while (isActive) {
                 delay(5000)
@@ -611,7 +675,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val archived = _archivedSessions.value
                     _sessions.value = result.filter { it.name !in archived }
                     _currentSession.value?.let { pollSessionOutput(it) }
-                } catch (_: Exception) {}
+                    // Reset on success
+                    if (consecutivePollFailures > 0) {
+                        consecutivePollFailures = 0
+                        _connectionState.value = ConnectionState.CONNECTED
+                    }
+                } catch (_: Exception) {
+                    consecutivePollFailures++
+                    if (consecutivePollFailures >= 3) {
+                        _connectionState.value = ConnectionState.CONNECTING
+                        val reconnected = ssh.reconnect()
+                        if (reconnected) {
+                            consecutivePollFailures = 0
+                            _connectionState.value = ConnectionState.CONNECTED
+                            refreshSessions()
+                        } else if (consecutivePollFailures >= 6) {
+                            _connectionState.value = ConnectionState.ERROR
+                            _errorMessage.value = "Connection lost. Tap to reconnect."
+                            pollJob?.cancel()
+                        }
+                    }
+                }
             }
         }
     }

@@ -17,15 +17,19 @@ private fun shellEscape(s: String): String {
 
 class SshManager {
     private var session: Session? = null
+    private var lastConfig: SshConfig? = null
     private val jsch = JSch()
+    private var identityAdded = false
 
     val isConnected: Boolean get() = session?.isConnected == true
 
     suspend fun connect(config: SshConfig) = withContext(Dispatchers.IO) {
         disconnect()
+        lastConfig = config
 
-        if (config.keyPath.isNotBlank()) {
+        if (config.keyPath.isNotBlank() && !identityAdded) {
             jsch.addIdentity(config.keyPath)
+            identityAdded = true
         }
 
         session = jsch.getSession(config.username, config.host, config.port).apply {
@@ -42,14 +46,44 @@ class SshManager {
         }
     }
 
+    suspend fun reconnect(): Boolean = withContext(Dispatchers.IO) {
+        val config = lastConfig ?: return@withContext false
+        try {
+            disconnect()
+            connect(config)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private suspend fun ensureConnected() {
+        if (session?.isConnected != true) {
+            if (!reconnect()) {
+                throw IllegalStateException("Not connected")
+            }
+        }
+    }
+
     fun disconnect() {
         session?.disconnect()
         session = null
     }
 
     suspend fun exec(command: String): String = withContext(Dispatchers.IO) {
+        ensureConnected()
         val s = session ?: throw IllegalStateException("Not connected")
-        val channel = s.openChannel("exec") as ChannelExec
+        val channel = try {
+            s.openChannel("exec") as ChannelExec
+        } catch (e: Exception) {
+            // Channel open failed — try reconnect once
+            if (reconnect()) {
+                val s2 = session ?: throw IllegalStateException("Not connected")
+                s2.openChannel("exec") as ChannelExec
+            } else {
+                throw e
+            }
+        }
         val output = ByteArrayOutputStream()
         val errOutput = ByteArrayOutputStream()
         channel.outputStream = output
@@ -314,14 +348,6 @@ WORKEREOF""")
         } catch (e: Exception) {
             ""
         }
-    }
-
-    suspend fun createSession(name: String, prompt: String, model: ClaudeModel = ClaudeModel.OPUS): String = withContext(Dispatchers.IO) {
-        val sanitizedName = name.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        val escapedPrompt = prompt.replace("'", "'\\''")
-        ensureMobileWorkspace()
-        exec("tmux new-session -d -s '$sanitizedName' -c ~/claude-mobile \"claude -p '${escapedPrompt}' --model ${model.id} --dangerously-skip-permissions 2>&1 | tee /tmp/claude-$sanitizedName.log; echo '---DONE---'; sleep 86400\"")
-        sanitizedName
     }
 
     suspend fun renameSession(oldName: String, newName: String): String = withContext(Dispatchers.IO) {

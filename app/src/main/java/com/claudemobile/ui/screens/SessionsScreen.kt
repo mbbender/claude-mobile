@@ -29,11 +29,11 @@ import kotlinx.coroutines.launch
 fun SessionsScreen(
     sessions: List<ClaudeSession>,
     onSessionClick: (String) -> Unit,
-    onQuickNewInteractive: (ClaudeModel) -> Unit,
-    onNewInteractive: (String, ClaudeModel) -> Unit,
-    onNewTask: (String, String, ClaudeModel) -> Unit,
+    onQuickNewInteractive: () -> Unit,
+    onNewInteractive: (String) -> Unit,
     onKillSession: (String) -> Unit,
     onArchiveSession: (String) -> Unit = {},
+    onArchivedSessionClick: (String) -> Unit = {},
     onDismissArchived: (String) -> Unit = {},
     onRenameSession: (String, String) -> Unit = { _, _ -> },
     onRefresh: () -> Unit,
@@ -52,9 +52,7 @@ fun SessionsScreen(
     archivedSessions: Set<String> = emptySet()
 ) {
     var showNameDialog by remember { mutableStateOf(false) }
-    var showTaskDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
-    var selectedModel by remember { mutableStateOf(ClaudeModel.OPUS) }
 
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
@@ -110,50 +108,10 @@ fun SessionsScreen(
             )
         },
         floatingActionButton = {
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Model toggle
-                SmallFloatingActionButton(
-                    onClick = {
-                        selectedModel = if (selectedModel == ClaudeModel.OPUS) ClaudeModel.SONNET else ClaudeModel.OPUS
-                    },
-                    containerColor = if (selectedModel == ClaudeModel.OPUS)
-                        MaterialTheme.colorScheme.tertiaryContainer
-                    else MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Text(
-                        if (selectedModel == ClaudeModel.OPUS) "O" else "S",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (selectedModel == ClaudeModel.OPUS)
-                            MaterialTheme.colorScheme.onTertiaryContainer
-                        else MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                }
-                SmallFloatingActionButton(
-                    onClick = { showTaskDialog = true },
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Icon(Icons.Default.Assignment, contentDescription = "New Task")
-                }
-                Box(
-                    modifier = Modifier
-                        .scale(animatedScale)
-                        .combinedClickable(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                scope.launch {
-                                    fabScale = 0.85f
-                                    kotlinx.coroutines.delay(100)
-                                    fabScale = 1f
-                                }
-                                onQuickNewInteractive(selectedModel)
-                            },
-                            onLongClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                showNameDialog = true
-                            }
-                        )
-                ) {
-                    FloatingActionButton(
+            Box(
+                modifier = Modifier
+                    .scale(animatedScale)
+                    .combinedClickable(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             scope.launch {
@@ -161,12 +119,27 @@ fun SessionsScreen(
                                 kotlinx.coroutines.delay(100)
                                 fabScale = 1f
                             }
-                            onQuickNewInteractive(selectedModel)
+                            onQuickNewInteractive()
                         },
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = "New Session")
-                    }
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            showNameDialog = true
+                        }
+                    )
+            ) {
+                FloatingActionButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        scope.launch {
+                            fabScale = 0.85f
+                            kotlinx.coroutines.delay(100)
+                            fabScale = 1f
+                        }
+                        onQuickNewInteractive()
+                    },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "New Session")
                 }
             }
         }
@@ -281,6 +254,7 @@ fun SessionsScreen(
                                 tokens = sessionTokens[name],
                                 cost = sessionCosts[name],
                                 model = sessionModels[name],
+                                onClick = { onArchivedSessionClick(name) },
                                 onDismiss = { onDismissArchived(name) }
                             )
                         }
@@ -292,29 +266,15 @@ fun SessionsScreen(
 
     if (showNameDialog) {
         NewSessionDialog(
-            title = "New Interactive Session",
-            showPrompt = false,
-            initialModel = selectedModel,
+            title = "New Session",
             onDismiss = { showNameDialog = false },
-            onConfirm = { name, _, model ->
-                onNewInteractive(name, model)
+            onConfirm = { name ->
+                onNewInteractive(name)
                 showNameDialog = false
             }
         )
     }
 
-    if (showTaskDialog) {
-        NewSessionDialog(
-            title = "New Task",
-            showPrompt = true,
-            initialModel = selectedModel,
-            onDismiss = { showTaskDialog = false },
-            onConfirm = { name, prompt, model ->
-                onNewTask(name, prompt, model)
-                showTaskDialog = false
-            }
-        )
-    }
 
     renameTarget?.let { oldName ->
         RenameSessionDialog(
@@ -426,10 +386,11 @@ private fun ArchivedSessionCard(
     tokens: Long? = null,
     cost: Double? = null,
     model: ClaudeModel? = null,
+    onClick: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         )
@@ -488,59 +449,28 @@ private fun ArchivedSessionCard(
 @Composable
 private fun NewSessionDialog(
     title: String,
-    showPrompt: Boolean,
-    initialModel: ClaudeModel = ClaudeModel.OPUS,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, prompt: String, model: ClaudeModel) -> Unit
+    onConfirm: (name: String) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
-    var prompt by remember { mutableStateOf("") }
-    var model by remember { mutableStateOf(initialModel) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Session name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("my-task") }
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ClaudeModel.entries.forEach { m ->
-                        FilterChip(
-                            selected = model == m,
-                            onClick = { model = m },
-                            label = { Text(m.displayName) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                if (showPrompt) {
-                    OutlinedTextField(
-                        value = prompt,
-                        onValueChange = { prompt = it },
-                        label = { Text("Prompt for Claude") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 120.dp),
-                        maxLines = 8,
-                        placeholder = { Text("Describe what you want Claude to do...") }
-                    )
-                }
-            }
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Session name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("my-task") }
+            )
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(name, prompt, model) },
-                enabled = name.isNotBlank() && (!showPrompt || prompt.isNotBlank())
+                onClick = { onConfirm(name) },
+                enabled = name.isNotBlank()
             ) {
                 Text("Create")
             }

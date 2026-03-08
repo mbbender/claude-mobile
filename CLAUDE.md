@@ -11,3 +11,14 @@ Rules:
 - If showing code, keep snippets short (under 10 lines). Say "I updated the file" rather than showing the whole diff.
 - Use plain language. Avoid markdown headers and horizontal rules.
 - When asked to do a task, do it and confirm briefly.
+
+# Feature Development Workflow
+
+When developing a new feature:
+1. Create a new git branch from main (e.g., `git checkout -b feature/feature-name`).
+2. Develop and commit the code on that branch.
+3. When complete, switch back to main, pull latest, and merge the feature branch in.
+4. Resolve any merge conflicts if they exist.
+5. Delete the feature branch after a successful merge.
+
+This allows multiple features to be developed in parallel on separate branches.
