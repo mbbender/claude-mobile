@@ -79,10 +79,10 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
     val sessionModels by viewModel.sessionModels.collectAsState()
     val archivedSessions by viewModel.archivedSessions.collectAsState()
     val sessionSummaries by viewModel.sessionSummaries.collectAsState()
-    val sessionsRefreshing by viewModel.sessionsRefreshing.collectAsState()
     val sessionConnectionStates by viewModel.sessionConnectionStates.collectAsState()
     val pendingSessions by viewModel.pendingSessions.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
+    val displayNames by viewModel.displayNames.collectAsState()
 
     val activity = LocalContext.current as FragmentActivity
     val biometric = viewModel.biometric
@@ -162,8 +162,9 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
             }
             "chat" -> {
                 val session = currentSession ?: return@Crossfade
+                val sessionDisplayName = displayNames[session] ?: session
                 ChatScreen(
-                    sessionName = session,
+                    sessionName = sessionDisplayName,
                     messages = chatMessages[session].orEmpty(),
                     connectionLabel = connectionLabel,
                     isWaiting = session in waitingSessions,
@@ -187,7 +188,6 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                     onDismissArchived = viewModel::dismissArchivedSession,
                     onRenameSession = viewModel::renameSessionManual,
                     onRefresh = viewModel::refreshSessions,
-                    onDisconnect = viewModel::disconnect,
                     onCheckUpdate = { viewModel.checkForUpdate(silent = false) },
                     updateInfo = updateAvailable,
                     onInstallUpdate = viewModel::installUpdate,
@@ -203,11 +203,11 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                     sessionSummaries = sessionSummaries,
                     waitingSessions = waitingSessions,
                     sessionErrors = sessionErrors,
-                    sessionsRefreshing = sessionsRefreshing,
                     sessionConnectionStates = sessionConnectionStates,
                     sshConnectionState = connectionState,
                     autoConnectEnabled = autoConnectEnabled,
-                    onToggleAutoConnect = viewModel::setAutoConnect
+                    onToggleAutoConnect = viewModel::setAutoConnect,
+                    displayNames = displayNames
                 )
             }
         }

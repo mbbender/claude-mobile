@@ -4,6 +4,19 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val gitTag: String = providers.exec {
+    commandLine("git", "describe", "--tags", "--exact-match")
+    isIgnoreExitValue = true
+}.standardOutput.asText.get().trim()
+
+val gitBranch: String = providers.exec {
+    commandLine("git", "rev-parse", "--abbrev-ref", "HEAD")
+}.standardOutput.asText.get().trim()
+
+val gitShortHash: String = providers.exec {
+    commandLine("git", "rev-parse", "--short", "HEAD")
+}.standardOutput.asText.get().trim()
+
 android {
     namespace = "com.claudemobile"
     compileSdk = 35
@@ -12,8 +25,15 @@ android {
         applicationId = "com.claudemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 71
-        versionName = "2.55"
+        versionCode = 89
+        versionName = "2.73"
+
+        val buildLabel = if (gitTag.isNotEmpty()) {
+            gitTag
+        } else {
+            "$gitBranch-$versionName-$gitShortHash"
+        }
+        buildConfigField("String", "BUILD_LABEL", "\"$buildLabel\"")
     }
 
     buildTypes {
@@ -31,6 +51,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

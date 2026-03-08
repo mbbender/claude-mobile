@@ -3,11 +3,16 @@ package com.claudemobile.ui.screens
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -15,10 +20,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.claudemobile.model.ClaudeModel
 import com.claudemobile.model.ClaudeSession
@@ -26,6 +34,7 @@ import com.claudemobile.model.ConnectionState
 import com.claudemobile.model.SessionConnectionState
 import com.claudemobile.update.UpdateInfo
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -40,7 +49,6 @@ fun SessionsScreen(
     onDismissArchived: (String) -> Unit = {},
     onRenameSession: (String, String) -> Unit = { _, _ -> },
     onRefresh: () -> Unit,
-    onDisconnect: () -> Unit,
     onCheckUpdate: () -> Unit = {},
     updateInfo: UpdateInfo? = null,
     onInstallUpdate: () -> Unit = {},
@@ -56,11 +64,11 @@ fun SessionsScreen(
     sessionSummaries: Map<String, String> = emptyMap(),
     waitingSessions: Set<String> = emptySet(),
     sessionErrors: Map<String, String> = emptyMap(),
-    sessionsRefreshing: Boolean = false,
     sessionConnectionStates: Map<String, SessionConnectionState> = emptyMap(),
     sshConnectionState: ConnectionState = ConnectionState.CONNECTED,
     autoConnectEnabled: Boolean = false,
-    onToggleAutoConnect: (Boolean) -> Unit = {}
+    onToggleAutoConnect: (Boolean) -> Unit = {},
+    displayNames: Map<String, String> = emptyMap()
 ) {
     var showNameDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
@@ -93,7 +101,7 @@ fun SessionsScreen(
                         Text("Sessions")
                         if (versionName.isNotBlank()) {
                             Text(
-                                "v$versionName",
+                                versionName,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -110,12 +118,6 @@ fun SessionsScreen(
                         } else {
                             Icon(Icons.Default.SystemUpdate, contentDescription = "Check for updates")
                         }
-                    }
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh sessions")
-                    }
-                    IconButton(onClick = onDisconnect) {
-                        Icon(Icons.Default.LinkOff, contentDescription = "Disconnect")
                     }
                 }
             )
@@ -295,39 +297,48 @@ fun SessionsScreen(
                     items(sessions, key = { it.name }) { session ->
                         val connState = sessionConnectionStates[session.name]
                             ?: SessionConnectionState.DISCONNECTED
-                        SessionCard(
-                            session = session,
-                            onClick = { onSessionClick(session.name) },
-                            onKill = { onKillSession(session.name) },
+                        SwipeToRevealCard(
                             onArchive = { onArchiveSession(session.name) },
-                            onLongClick = { renameTarget = session.name },
-                            tokens = sessionTokens[session.name],
-                            cost = sessionCosts[session.name],
-                            model = sessionModels[session.name],
-                            isWaiting = session.name in waitingSessions,
-                            hasError = session.name in sessionErrors,
-                            connectionState = connState
-                        )
+                            onDelete = { onKillSession(session.name) }
+                        ) {
+                            SessionCard(
+                                session = session,
+                                displayName = displayNames[session.name],
+                                onClick = { onSessionClick(session.name) },
+                                onLongClick = { renameTarget = session.name },
+                                tokens = sessionTokens[session.name],
+                                cost = sessionCosts[session.name],
+                                model = sessionModels[session.name],
+                                isWaiting = session.name in waitingSessions,
+                                hasError = session.name in sessionErrors,
+                                connectionState = connState
+                            )
+                        }
                     }
                     if (archivedSessions.isNotEmpty()) {
                         item {
                             Text(
-                                "Completed",
+                                "Archived",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                             )
                         }
-                        items(archivedSessions.toList(), key = { "archived-$it" }) { name ->
-                            ArchivedSessionCard(
-                                name = name,
-                                tokens = sessionTokens[name],
-                                cost = sessionCosts[name],
-                                model = sessionModels[name],
-                                summary = sessionSummaries[name],
-                                onClick = { onArchivedSessionClick(name) },
-                                onDismiss = { onDismissArchived(name) }
-                            )
+                        items(archivedSessions.toList().reversed(), key = { "archived-$it" }) { name ->
+                            SwipeToRevealCard(
+                                onDelete = { onDismissArchived(name) },
+                                dismissOnFullSwipe = true
+                            ) {
+                                ArchivedSessionCard(
+                                    name = displayNames[name] ?: name,
+                                    tmuxName = name,
+                                    tokens = sessionTokens[name],
+                                    cost = sessionCosts[name],
+                                    model = sessionModels[name],
+                                    summary = sessionSummaries[name],
+                                    onClick = { onArchivedSessionClick(name) }
+                                )
+                            }
                         }
                     }
                 }
@@ -346,15 +357,110 @@ fun SessionsScreen(
         )
     }
 
-    renameTarget?.let { oldName ->
+    renameTarget?.let { tmuxName ->
         RenameSessionDialog(
-            currentName = oldName,
+            currentName = displayNames[tmuxName] ?: tmuxName,
             onDismiss = { renameTarget = null },
             onConfirm = { newName ->
-                onRenameSession(oldName, newName)
+                onRenameSession(tmuxName, newName)
                 renameTarget = null
             }
         )
+    }
+}
+
+@Composable
+private fun SwipeToRevealCard(
+    onArchive: (() -> Unit)? = null,
+    onDelete: () -> Unit,
+    dismissOnFullSwipe: Boolean = false,
+    content: @Composable () -> Unit
+) {
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    val animatedOffsetX by animateFloatAsState(
+        targetValue = offsetX,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
+        label = "swipeOffset"
+    )
+
+    // Button width: archive + delete, or just delete
+    val buttonCount = if (onArchive != null) 2 else 1
+    val density = LocalDensity.current
+    val revealWidth = with(density) { (buttonCount * 72).dp.toPx() }
+    val dismissThreshold = revealWidth * 2.5f
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+    ) {
+        // Background action buttons
+        Row(
+            modifier = Modifier
+                .matchParentSize()
+                .background(
+                    if (animatedOffsetX < -revealWidth * 1.5f)
+                        MaterialTheme.colorScheme.errorContainer
+                    else
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                ),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (onArchive != null) {
+                IconButton(
+                    onClick = {
+                        offsetX = 0f
+                        onArchive()
+                    },
+                    modifier = Modifier.size(72.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Archive,
+                        contentDescription = "Archive",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            IconButton(
+                onClick = {
+                    offsetX = 0f
+                    onDelete()
+                },
+                modifier = Modifier.size(72.dp)
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
+        // Foreground content
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(animatedOffsetX.roundToInt(), 0) }
+                .background(MaterialTheme.colorScheme.surface)
+                .draggable(
+                    orientation = Orientation.Horizontal,
+                    state = rememberDraggableState { delta ->
+                        val new = offsetX + delta
+                        val maxSwipe = if (dismissOnFullSwipe) -dismissThreshold else -revealWidth
+                        offsetX = new.coerceIn(maxSwipe, 0f)
+                    },
+                    onDragStopped = {
+                        if (dismissOnFullSwipe && offsetX < -dismissThreshold * 0.8f) {
+                            onDelete()
+                        } else {
+                            offsetX = if (offsetX < -revealWidth / 2f) -revealWidth else 0f
+                        }
+                    }
+                )
+        ) {
+            content()
+        }
     }
 }
 
@@ -362,9 +468,8 @@ fun SessionsScreen(
 @Composable
 private fun SessionCard(
     session: ClaudeSession,
+    displayName: String? = null,
     onClick: () -> Unit,
-    onKill: () -> Unit,
-    onArchive: () -> Unit = {},
     onLongClick: () -> Unit = {},
     tokens: Long? = null,
     cost: Double? = null,
@@ -397,7 +502,7 @@ private fun SessionCard(
             hasError -> MaterialTheme.colorScheme.error
             isWaiting -> androidx.compose.ui.graphics.Color(0xFF4CAF50) // Green
             isReconnecting -> MaterialTheme.colorScheme.outline
-            else -> androidx.compose.ui.graphics.Color(0xFF4CAF50) // Green (connected)
+            else -> MaterialTheme.colorScheme.outline // Connected but idle (gray)
         },
         label = "status"
     )
@@ -447,7 +552,7 @@ private fun SessionCard(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = session.name,
+                    text = displayName ?: session.name,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = if (expanded) Int.MAX_VALUE else 1,
                     overflow = if (expanded) TextOverflow.Clip else TextOverflow.Ellipsis
@@ -474,24 +579,17 @@ private fun SessionCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-            }
-
-            if (!isDisconnected) {
-                IconButton(onClick = onArchive) {
-                    Icon(
-                        Icons.Default.Archive,
-                        contentDescription = "Archive",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                if (displayName != null && displayName != session.name) {
+                    Text(
+                        text = session.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
-            IconButton(onClick = onKill) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Delete",
-                    tint = MaterialTheme.colorScheme.error
-                )
-            }
+
         }
     }
 }
@@ -499,12 +597,12 @@ private fun SessionCard(
 @Composable
 private fun ArchivedSessionCard(
     name: String,
+    tmuxName: String = name,
     tokens: Long? = null,
     cost: Double? = null,
     model: ClaudeModel? = null,
     summary: String? = null,
-    onClick: () -> Unit = {},
-    onDismiss: () -> Unit
+    onClick: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -535,6 +633,15 @@ private fun ArchivedSessionCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (tmuxName != name) {
+                    Text(
+                        text = tmuxName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 if (summary != null) {
                     Text(
                         text = summary,
@@ -563,13 +670,6 @@ private fun ArchivedSessionCard(
                 )
             }
 
-            IconButton(onClick = onDismiss) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Delete",
-                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.6f)
-                )
-            }
         }
     }
 }

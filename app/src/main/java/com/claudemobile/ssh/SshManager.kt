@@ -125,9 +125,10 @@ class SshManager {
             }
     }
 
-    suspend fun ensureMobileWorkspace() = withContext(Dispatchers.IO) {
-        exec("mkdir -p ~/Claude/claude-mobile")
-        exec("""cat > ~/Claude/claude-mobile/CLAUDE.md << 'MEOF'
+    suspend fun ensureMobileWorkspace(sessionName: String? = null) = withContext(Dispatchers.IO) {
+        val workDir = if (sessionName != null) "~/Claude/claude-mobile/sessions/$sessionName" else "~/Claude/claude-mobile"
+        exec("mkdir -p $workDir")
+        exec("""cat > $workDir/CLAUDE.md << 'MEOF'
 # Mobile Mode
 
 You are being accessed from a mobile phone app (Claude Mobile).
@@ -146,6 +147,7 @@ MEOF""")
 
     suspend fun setupMobileSession(sessionName: String, model: ClaudeModel = ClaudeModel.OPUS) = withContext(Dispatchers.IO) {
         val dir = "/tmp/claude-mobile/$sessionName"
+        val workDir = "~/Claude/claude-mobile/sessions/$sessionName"
         exec("mkdir -p '$dir'")
         exec("echo 'ready' > '$dir/status'")
         exec("echo '${model.id}' > '$dir/model'")
@@ -155,7 +157,7 @@ MEOF""")
         exec("echo '0' > '$dir/tokens'")
         exec("""cat > '$dir/worker.sh' << 'WORKEREOF'
 #!/bin/bash
-cd ~/Claude/claude-mobile
+cd $workDir
 DIR="$dir"
 MODEL="${model.id}"
 FIRST=true
@@ -224,7 +226,8 @@ WORKEREOF""")
 
         if (paneCmd == "bash" || paneCmd.isBlank()) {
             // Worker is dead — rewrite and restart it
-            ensureMobileWorkspace()
+            val workDir = "~/Claude/claude-mobile/sessions/$dataDir"
+            ensureMobileWorkspace(dataDir)
             exec("mkdir -p '$dir'")
             exec("echo 'ready' > '$dir/status'")
 
@@ -232,7 +235,7 @@ WORKEREOF""")
             exec("echo '${exec("cat '$dir/tokens' 2>/dev/null").trim().ifBlank { "0" }}' > '$dir/tokens'")
             exec("""cat > '$dir/worker.sh' << 'WORKEREOF'
 #!/bin/bash
-cd ~/Claude/claude-mobile
+cd $workDir
 DIR="$dir"
 MODEL="${model.id}"
 FIRST=false
@@ -310,15 +313,8 @@ WORKEREOF""")
         val check = exec("test -d '/tmp/claude-mobile/$sessionName' && echo 'yes' || echo 'no'").trim()
         if (check == "yes") return@withContext sessionName
 
-        // Otherwise, look for the dir that has a worker.sh running under this tmux session
-        // by listing all data dirs and checking which tmux session they belong to
-        val dirs = exec("ls /tmp/claude-mobile/ 2>/dev/null").trim()
-        if (dirs.isNotBlank()) {
-            for (dir in dirs.lines()) {
-                val trimmed = dir.trim()
-                if (trimmed.isNotBlank()) return@withContext trimmed
-            }
-        }
+        // No matching directory found — just use the session name
+        // (the caller will create it if needed)
         sessionName
     }
 
@@ -396,7 +392,7 @@ WORKEREOF""")
 
     suspend fun startInteractiveSession(name: String, model: ClaudeModel = ClaudeModel.OPUS): String = withContext(Dispatchers.IO) {
         val sanitizedName = name.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        ensureMobileWorkspace()
+        ensureMobileWorkspace(sanitizedName)
         setupMobileSession(sanitizedName, model)
         sanitizedName
     }
