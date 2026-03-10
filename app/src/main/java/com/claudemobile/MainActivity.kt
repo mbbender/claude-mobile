@@ -86,6 +86,9 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
     val pendingSessions by viewModel.pendingSessions.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
     val displayNames by viewModel.displayNames.collectAsState()
+    val projects by viewModel.projects.collectAsState()
+    val selectedProject by viewModel.selectedProject.collectAsState()
+    val sessionProjectMap by viewModel.sessionProjects.collectAsState()
     val pendingImageUri by viewModel.pendingImageUri.collectAsState()
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -224,7 +227,12 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                     sshConnectionState = connectionState,
                     autoConnectEnabled = autoConnectEnabled,
                     onToggleAutoConnect = viewModel::setAutoConnect,
-                    displayNames = displayNames
+                    displayNames = displayNames,
+                    projects = projects,
+                    selectedProject = selectedProject,
+                    onSelectProject = viewModel::selectProject,
+                    onNewProjectSession = viewModel::createProjectSession,
+                    sessionProjectMap = sessionProjectMap
                 )
             }
         }

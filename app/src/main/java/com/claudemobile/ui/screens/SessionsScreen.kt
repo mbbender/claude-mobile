@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import com.claudemobile.model.ClaudeModel
 import com.claudemobile.model.ClaudeSession
 import com.claudemobile.model.ConnectionState
+import com.claudemobile.model.Project
 import com.claudemobile.model.SessionConnectionState
 import com.claudemobile.update.UpdateInfo
 import kotlinx.coroutines.launch
@@ -68,10 +69,16 @@ fun SessionsScreen(
     sshConnectionState: ConnectionState = ConnectionState.CONNECTED,
     autoConnectEnabled: Boolean = false,
     onToggleAutoConnect: (Boolean) -> Unit = {},
-    displayNames: Map<String, String> = emptyMap()
+    displayNames: Map<String, String> = emptyMap(),
+    projects: List<Project> = emptyList(),
+    selectedProject: Project? = null,
+    onSelectProject: (Project?) -> Unit = {},
+    onNewProjectSession: (Project) -> Unit = {},
+    sessionProjectMap: Map<String, String> = emptyMap()
 ) {
     var showNameDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
+    var showProjectDropdown by remember { mutableStateOf(false) }
 
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
@@ -97,14 +104,55 @@ fun SessionsScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text("Sessions")
-                        if (versionName.isNotBlank()) {
-                            Text(
-                                versionName,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Box {
+                        Row(
+                            modifier = Modifier.clickable { showProjectDropdown = true },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f, fill = false)) {
+                                Text(selectedProject?.name ?: "All Sessions")
+                                if (versionName.isNotBlank()) {
+                                    Text(
+                                        versionName,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            if (projects.isNotEmpty()) {
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = "Select project",
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = showProjectDropdown,
+                            onDismissRequest = { showProjectDropdown = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("All Sessions") },
+                                onClick = {
+                                    onSelectProject(null)
+                                    showProjectDropdown = false
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(20.dp))
+                                }
                             )
+                            projects.forEach { project ->
+                                DropdownMenuItem(
+                                    text = { Text(project.name) },
+                                    onClick = {
+                                        onSelectProject(project)
+                                        showProjectDropdown = false
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    }
+                                )
+                            }
                         }
                     }
                 },
@@ -124,19 +172,24 @@ fun SessionsScreen(
         },
         floatingActionButton = {
             if (isConnected) {
+                val fabAction = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    scope.launch {
+                        fabScale = 0.85f
+                        kotlinx.coroutines.delay(100)
+                        fabScale = 1f
+                    }
+                    if (selectedProject != null) {
+                        onNewProjectSession(selectedProject)
+                    } else {
+                        onQuickNewInteractive()
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .scale(animatedScale)
                         .combinedClickable(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                scope.launch {
-                                    fabScale = 0.85f
-                                    kotlinx.coroutines.delay(100)
-                                    fabScale = 1f
-                                }
-                                onQuickNewInteractive()
-                            },
+                            onClick = { fabAction() },
                             onLongClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 showNameDialog = true
@@ -144,15 +197,7 @@ fun SessionsScreen(
                         )
                 ) {
                     FloatingActionButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            scope.launch {
-                                fabScale = 0.85f
-                                kotlinx.coroutines.delay(100)
-                                fabScale = 1f
-                            }
-                            onQuickNewInteractive()
-                        },
+                        onClick = { fabAction() },
                         containerColor = MaterialTheme.colorScheme.primaryContainer
                     ) {
                         Icon(Icons.Default.Add, contentDescription = "New Session")
@@ -256,7 +301,19 @@ fun SessionsScreen(
                 }
             }
 
-            if (sessions.isEmpty() && archivedSessions.isEmpty()) {
+            // Filter sessions by selected project
+            val filteredSessions = if (selectedProject != null) {
+                sessions.filter { sessionProjectMap[it.name] == selectedProject.path }
+            } else {
+                sessions
+            }
+            val filteredArchived = if (selectedProject != null) {
+                archivedSessions.filter { sessionProjectMap[it] == selectedProject.path }
+            } else {
+                archivedSessions
+            }
+
+            if (filteredSessions.isEmpty() && filteredArchived.isEmpty() && (selectedProject != null || projects.isEmpty())) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -270,18 +327,15 @@ fun SessionsScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            if (isConnected) "No active sessions" else "Loading sessions...",
+                            if (!isConnected) "Loading sessions..."
+                            else if (selectedProject != null) "No sessions in ${selectedProject.name}"
+                            else "No active sessions",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         if (isConnected) {
                             Text(
-                                "Tap + to start a new Claude session",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                "Long-press + to set a custom name",
+                                "Tap + to start a new session",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -294,7 +348,33 @@ fun SessionsScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(sessions, key = { it.name }) { session ->
+                    if (selectedProject == null && projects.isNotEmpty()) {
+                        item {
+                            Text(
+                                "Projects",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
+                        items(projects, key = { "project-${it.path}" }) { project ->
+                            ProjectCard(
+                                project = project,
+                                onClick = { onSelectProject(project) }
+                            )
+                        }
+                        if (filteredSessions.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "Sessions",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                )
+                            }
+                        }
+                    }
+                    items(filteredSessions, key = { it.name }) { session ->
                         val connState = sessionConnectionStates[session.name]
                             ?: SessionConnectionState.DISCONNECTED
                         SwipeToRevealCard(
@@ -315,7 +395,7 @@ fun SessionsScreen(
                             )
                         }
                     }
-                    if (archivedSessions.isNotEmpty()) {
+                    if (filteredArchived.isNotEmpty()) {
                         item {
                             Text(
                                 "Archived",
@@ -324,7 +404,7 @@ fun SessionsScreen(
                                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                             )
                         }
-                        items(archivedSessions.toList().reversed(), key = { "archived-$it" }) { name ->
+                        items(filteredArchived.toList().reversed(), key = { "archived-$it" }) { name ->
                             SwipeToRevealCard(
                                 onDelete = { onDismissArchived(name) },
                                 dismissOnFullSwipe = true
@@ -670,6 +750,56 @@ private fun ArchivedSessionCard(
                 )
             }
 
+        }
+    }
+}
+
+@Composable
+private fun ProjectCard(
+    project: Project,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Folder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = project.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = project.path.replace(Regex("^/home/[^/]+"), "~"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                Icons.Default.ChevronRight,
+                contentDescription = "Open project",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

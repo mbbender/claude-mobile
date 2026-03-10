@@ -120,6 +120,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Map display name → original data directory name (for file-based protocol paths)
     private val dataDirNames = mutableMapOf<String, String>()
 
+    // Projects discovered on the remote server
+    private val _projects = MutableStateFlow<List<Project>>(emptyList())
+    val projects: StateFlow<List<Project>> = _projects.asStateFlow()
+
+    // Track which project a session belongs to (sessionId → projectDir)
+    private val sessionProjectDirs = mutableMapOf<String, String>()
+    private val _sessionProjects = MutableStateFlow<Map<String, String>>(emptyMap())
+    val sessionProjects: StateFlow<Map<String, String>> = _sessionProjects.asStateFlow()
+
+    // Currently selected project filter in the header
+    private val _selectedProject = MutableStateFlow<Project?>(null)
+    val selectedProject: StateFlow<Project?> = _selectedProject.asStateFlow()
+
+    fun selectProject(project: Project?) {
+        _selectedProject.value = project
+    }
+
     // Pending image attachment
     private val _pendingImageUri = MutableStateFlow<Uri?>(null)
     val pendingImageUri: StateFlow<Uri?> = _pendingImageUri.asStateFlow()
@@ -219,6 +236,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 startPolling()
                 reconnectSessionsSequentially()
                 checkForUpdate()
+                fetchProjects()
             } catch (e: Exception) {
                 // Auto-connect failed — fall back to connect screen silently
                 _connectionState.value = ConnectionState.DISCONNECTED
@@ -259,6 +277,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 startPolling()
                 reconnectSessionsSequentially()
                 checkForUpdate()
+                fetchProjects()
             } catch (e: Exception) {
                 _connectionState.value = ConnectionState.ERROR
                 val authMethod = if (config.keyPath.isNotBlank()) "key:${config.keyPath}" else "password"
@@ -429,6 +448,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 _pendingSessions.value = _pendingSessions.value - sessionId
                 // If a message was queued while we were setting up, send it now
+                val queued = queuedMessages.remove(sessionId)
+                if (queued != null) {
+                    sendMessage(sessionId, queued)
+                }
+            }
+        }
+    }
+
+    private fun fetchProjects() {
+        viewModelScope.launch {
+            try {
+                _projects.value = ssh.listProjects()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun createProjectSession(project: Project) {
+        val existing = _sessions.value.map { it.name }.toSet() +
+            _archivedSessions.value +
+            _chatMessages.value.keys
+        var tempName: String
+        do {
+            tempName = "${project.name}_${funnyAdjectives.random()}_${funnyNouns.random()}"
+        } while (tempName in existing)
+
+        val sessionId = tempName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val displayName = "${project.name} — ${tempName.substringAfter("${project.name}_").replace("_", " ")}"
+
+        _displayNames.value = _displayNames.value + (sessionId to displayName)
+        _chatMessages.value = _chatMessages.value + (sessionId to emptyList())
+        _sessionModels.value = _sessionModels.value + (sessionId to ClaudeModel.OPUS)
+        messageCount[sessionId] = 0
+        sessionProjectDirs[sessionId] = project.path
+        _sessionProjects.value = _sessionProjects.value + (sessionId to project.path)
+        _currentSession.value = sessionId
+        _pendingSessions.value = _pendingSessions.value + sessionId
+
+        viewModelScope.launch {
+            try {
+                ssh.startInteractiveSession(tempName, ClaudeModel.OPUS, project.path)
+                dataDirNames[sessionId] = sessionId
+                _sessionConnectionStates.value = _sessionConnectionStates.value +
+                    (sessionId to SessionConnectionState.CONNECTED)
+                refreshSessions()
+            } catch (e: Exception) {
+                _sessionErrors.value = _sessionErrors.value + (sessionId to "Failed to create session: ${e.message}")
+            } finally {
+                _pendingSessions.value = _pendingSessions.value - sessionId
                 val queued = queuedMessages.remove(sessionId)
                 if (queued != null) {
                     sendMessage(sessionId, queued)
