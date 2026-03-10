@@ -17,9 +17,11 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val ssh = SshManager()
@@ -62,7 +64,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Track which sessions are waiting for a response
     private val _waitingSessions = MutableStateFlow<Set<String>>(emptySet())
     // Sessions actively being polled by waitForResponse (to avoid duplicate reads from background poller)
-    private val activelyPolling = mutableSetOf<String>()
+    private val activelyPolling = ConcurrentHashMap.newKeySet<String>()
     val waitingSessions: StateFlow<Set<String>> = _waitingSessions.asStateFlow()
 
     // Track session errors
@@ -72,7 +74,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Track sessions still being created on the server
     private val _pendingSessions = MutableStateFlow<Set<String>>(emptySet())
     val pendingSessions: StateFlow<Set<String>> = _pendingSessions.asStateFlow()
-    private val queuedMessages = mutableMapOf<String, String>()
+    private val queuedMessages = ConcurrentHashMap<String, String>()
 
     // Track token usage per session (display name → total tokens)
     private val _sessionTokens = MutableStateFlow<Map<String, Long>>(emptyMap())
@@ -105,27 +107,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val autoConnectEnabled: StateFlow<Boolean> = _autoConnect.asStateFlow()
 
     // Track sessions where user has sent at least one message
-    private val activatedSessions = mutableSetOf<String>()
+    private val activatedSessions = ConcurrentHashMap.newKeySet<String>()
 
     // Track user message count per session for auto-rename
-    private val messageCount = mutableMapOf<String, Int>()
+    private val messageCount = ConcurrentHashMap<String, Int>()
 
     // Track one-shot sessions that auto-archive after first response
-    private val oneShotSessions = mutableSetOf<String>()
+    private val oneShotSessions = ConcurrentHashMap.newKeySet<String>()
 
     // Display names that differ from tmux session names
     private val _displayNames = MutableStateFlow<Map<String, String>>(emptyMap())
     val displayNames: StateFlow<Map<String, String>> = _displayNames.asStateFlow()
 
     // Map display name → original data directory name (for file-based protocol paths)
-    private val dataDirNames = mutableMapOf<String, String>()
+    private val dataDirNames = ConcurrentHashMap<String, String>()
 
     // Projects discovered on the remote server
     private val _projects = MutableStateFlow<List<Project>>(emptyList())
     val projects: StateFlow<List<Project>> = _projects.asStateFlow()
 
     // Track which project a session belongs to (sessionId → projectDir)
-    private val sessionProjectDirs = mutableMapOf<String, String>()
+    private val sessionProjectDirs = ConcurrentHashMap<String, String>()
     private val _sessionProjects = MutableStateFlow<Map<String, String>>(emptyMap())
     val sessionProjects: StateFlow<Map<String, String>> = _sessionProjects.asStateFlow()
 
@@ -359,7 +361,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (!isActive) break
 
                 // Skip if already reconnected this launch (has a dataDir entry)
-                if (session.name in dataDirNames) continue
+                if (dataDirNames.containsKey(session.name)) continue
 
                 _sessionConnectionStates.value = _sessionConnectionStates.value +
                     (session.name to SessionConnectionState.RECONNECTING)
@@ -393,7 +395,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         (session.name to SessionConnectionState.CONNECTED)
 
                     if (result.isThinking) {
-                        _waitingSessions.value = _waitingSessions.value + session.name
+                        _waitingSessions.update { it + session.name }
                         launch { waitForResponse(session.name, result.dataDir) }
                     }
                 } catch (_: Exception) {
@@ -515,13 +517,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (hasMessages) {
             _currentSession.value = name
             // Ensure dataDir is set up for sending future messages
-            if (name !in dataDirNames) {
+            if (!dataDirNames.containsKey(name)) {
                 viewModelScope.launch {
                     try {
                         val result = ssh.reconnectSession(name)
                         dataDirNames[name] = result.dataDir
                         if (result.isThinking) {
-                            _waitingSessions.value = _waitingSessions.value + name
+                            _waitingSessions.update { it + name }
                             waitForResponse(name, result.dataDir)
                         }
                     } catch (_: Exception) {}
@@ -562,7 +564,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _currentSession.value = name
 
                 if (result.isThinking) {
-                    _waitingSessions.value = _waitingSessions.value + name
+                    _waitingSessions.update { it + name }
                     waitForResponse(name, result.dataDir)
                 }
             } catch (e: Exception) {
@@ -579,11 +581,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // If session is still being created, queue the message and show it in chat
         if (sessionName in _pendingSessions.value) {
             queuedMessages[sessionName] = message
-            val current = _chatMessages.value[sessionName].orEmpty()
             val newMsg = ChatMessage(content = message, isUser = true)
-            _chatMessages.value = _chatMessages.value + (sessionName to current + newMsg)
-            persistMessages(sessionName, current + newMsg)
-            _waitingSessions.value = _waitingSessions.value + sessionName
+            var updatedMsgs: List<ChatMessage> = emptyList()
+            _chatMessages.update { map ->
+                val current = map[sessionName].orEmpty()
+                updatedMsgs = current + newMsg
+                map + (sessionName to updatedMsgs)
+            }
+            persistMessages(sessionName, updatedMsgs)
+            _waitingSessions.update { it + sessionName }
             return
         }
 
@@ -626,15 +632,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     imageFileName = "img_${timestamp}.$ext"
                 }
 
-                val current = _chatMessages.value[sessionName].orEmpty()
                 val newMsg = ChatMessage(
                     content = message,
                     isUser = true,
                     imageUri = imageUri?.toString(),
                     imageName = imageFileName
                 )
-                val updated = current + newMsg
-                _chatMessages.value = _chatMessages.value + (sessionName to updated)
+                var updated: List<ChatMessage> = emptyList()
+                _chatMessages.update { map ->
+                    updated = map[sessionName].orEmpty() + newMsg
+                    map + (sessionName to updated)
+                }
                 persistMessages(sessionName, updated)
                 activatedSessions.add(sessionName)
 
@@ -656,7 +664,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 ssh.sendMobileMessage(dataDir, actualMessage, imageFileName)
-                _waitingSessions.value = _waitingSessions.value + sessionName
+                _waitingSessions.update { it + sessionName }
                 _sessionErrors.value = _sessionErrors.value - sessionName
 
                 messageCount[sessionName] = count + 1
@@ -669,7 +677,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 waitForResponse(sessionName, dataDir)
             } catch (e: Exception) {
                 _sessionErrors.value = _sessionErrors.value + (sessionName to (e.message ?: "Unknown error"))
-                _waitingSessions.value = _waitingSessions.value - sessionName
+                _waitingSessions.update { it - sessionName }
             }
         }
     }
@@ -710,26 +718,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ssh.getMobileStatus(dataDir)
                 } catch (e: Exception) {
                     _sessionErrors.value = _sessionErrors.value + (sessionName to "Lost connection to session")
-                    _waitingSessions.value = _waitingSessions.value - sessionName
+                    _waitingSessions.update { it - sessionName }
                     return
                 }
 
                 if (status == "ready" && waited > 2500) {
-                    val current = _chatMessages.value[sessionName].orEmpty()
-                        .filter { !it.isStatus }
                     val response = ssh.getMobileResponse(dataDir)
-                    if (response.isNotBlank()) {
-                        val assistantMsg = ChatMessage(content = response, isUser = false)
-                        val updatedMsgs = current + assistantMsg
-                        _chatMessages.value = _chatMessages.value + (sessionName to updatedMsgs)
-                        persistMessages(sessionName, updatedMsgs)
-                    } else {
-                        _chatMessages.value = _chatMessages.value + (sessionName to current)
+                    var updatedMsgs: List<ChatMessage>? = null
+                    _chatMessages.update { map ->
+                        val current = map[sessionName].orEmpty().filter { !it.isStatus }
+                        if (response.isNotBlank()) {
+                            val assistantMsg = ChatMessage(content = response, isUser = false)
+                            updatedMsgs = current + assistantMsg
+                            map + (sessionName to updatedMsgs!!)
+                        } else {
+                            map + (sessionName to current)
+                        }
                     }
+                    updatedMsgs?.let { persistMessages(sessionName, it) }
                     val (tokens, cost) = ssh.getMobileTokens(dataDir)
                     if (tokens > 0) _sessionTokens.value = _sessionTokens.value + (sessionName to tokens)
                     if (cost > 0) _sessionCosts.value = _sessionCosts.value + (sessionName to cost)
-                    _waitingSessions.value = _waitingSessions.value - sessionName
+                    _waitingSessions.update { it - sessionName }
 
                     saveActiveSessions()
 
@@ -749,18 +759,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val statusText = if (progress != null) "$friendlyMsg\n$progress" else friendlyMsg
                     val elapsed = "${waited / 60000}m ${(waited % 60000) / 1000}s"
 
-                    val current = _chatMessages.value[sessionName].orEmpty()
-                        .filter { !it.isStatus }
                     val statusMsg = ChatMessage(
                         content = "$statusText ($elapsed)",
                         isUser = false,
                         isStatus = true
                     )
-                    _chatMessages.value = _chatMessages.value + (sessionName to current + statusMsg)
+                    _chatMessages.update { map ->
+                        val current = map[sessionName].orEmpty().filter { !it.isStatus }
+                        map + (sessionName to current + statusMsg)
+                    }
                 }
             }
             _sessionErrors.value = _sessionErrors.value + (sessionName to "Response timed out after 10 minutes")
-            _waitingSessions.value = _waitingSessions.value - sessionName
+            _waitingSessions.update { it - sessionName }
         } finally {
             activelyPolling.remove(sessionName)
         }
@@ -1063,20 +1074,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             try {
                                 val status = ssh.getMobileStatus(dataDir)
                                 if (status == "ready") {
-                                    val current = _chatMessages.value[name].orEmpty()
-                                        .filter { !it.isStatus }
                                     val response = ssh.getMobileResponse(dataDir)
-                                    if (response.isNotBlank()) {
-                                        val assistantMsg = ChatMessage(content = response, isUser = false)
-                                        _chatMessages.value = _chatMessages.value + (name to current + assistantMsg)
-                                        persistMessages(name, current + assistantMsg)
-                                    } else {
-                                        _chatMessages.value = _chatMessages.value + (name to current)
+                                    var updatedMsgs: List<ChatMessage>? = null
+                                    _chatMessages.update { map ->
+                                        val current = map[name].orEmpty().filter { !it.isStatus }
+                                        if (response.isNotBlank()) {
+                                            val assistantMsg = ChatMessage(content = response, isUser = false)
+                                            updatedMsgs = current + assistantMsg
+                                            map + (name to updatedMsgs!!)
+                                        } else {
+                                            map + (name to current)
+                                        }
                                     }
+                                    updatedMsgs?.let { persistMessages(name, it) }
                                     val (tokens, cost) = ssh.getMobileTokens(dataDir)
                                     if (tokens > 0) _sessionTokens.value = _sessionTokens.value + (name to tokens)
                                     if (cost > 0) _sessionCosts.value = _sessionCosts.value + (name to cost)
-                                    _waitingSessions.value = _waitingSessions.value - name
+                                    _waitingSessions.update { it - name }
                                     saveActiveSessions()
                                 }
                             } catch (_: Exception) { /* ignore per-session errors */ }
