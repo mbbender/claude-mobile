@@ -374,18 +374,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val result = ssh.reconnectSession(session.name)
                     dataDirNames[session.name] = result.dataDir
 
-                    val messages = mutableListOf<ChatMessage>()
-                    if (result.lastPrompt != null) {
-                        messages.add(ChatMessage(content = result.lastPrompt, isUser = true))
-                    }
-                    if (result.lastResponse != null) {
-                        messages.add(ChatMessage(content = result.lastResponse, isUser = false))
-                    }
-                    // Merge: keep existing local messages if they have more history
                     val existing = _chatMessages.value[session.name].orEmpty()
-                    val merged = if (existing.size > messages.size) existing else messages
+                    val merged = mergeReconnectMessages(existing, result.lastPrompt, result.lastResponse)
                     _chatMessages.value = _chatMessages.value + (session.name to merged)
-                    if (messages.isNotEmpty()) persistMessages(session.name, merged)
+                    if (merged.isNotEmpty()) persistMessages(session.name, merged)
 
                     if (result.tokens > 0) {
                         _sessionTokens.value = _sessionTokens.value + (session.name to result.tokens)
@@ -545,16 +537,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val result = ssh.reconnectSession(name)
                 dataDirNames[name] = result.dataDir
 
-                val messages = mutableListOf<ChatMessage>()
-                if (result.lastPrompt != null) {
-                    messages.add(ChatMessage(content = result.lastPrompt, isUser = true))
-                }
-                if (result.lastResponse != null) {
-                    messages.add(ChatMessage(content = result.lastResponse, isUser = false))
-                }
-                // Merge: keep existing local messages if they have more history
                 val existing = _chatMessages.value[name].orEmpty()
-                val merged = if (existing.size > messages.size) existing else messages
+                val merged = mergeReconnectMessages(existing, result.lastPrompt, result.lastResponse)
                 _chatMessages.value = _chatMessages.value + (name to merged)
 
                 if (result.tokens > 0) {
@@ -723,8 +707,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val status = try {
                     ssh.getMobileStatus(dataDir)
                 } catch (e: Exception) {
-                    _sessionErrors.value = _sessionErrors.value + (sessionName to "Lost connection to session")
-                    _waitingSessions.update { it - sessionName }
+                    // Connection lost — keep session in waitingSessions so the background
+                    // poller picks up the response after reconnection
                     return
                 }
 
@@ -781,6 +765,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } finally {
             activelyPolling.remove(sessionName)
         }
+    }
+
+    /**
+     * Merge server-side last prompt/response with local chat history.
+     * If local history exists and the server has a response that isn't already the last
+     * assistant message, append it (it arrived while we were disconnected).
+     */
+    private fun mergeReconnectMessages(
+        existing: List<ChatMessage>,
+        lastPrompt: String?,
+        lastResponse: String?
+    ): List<ChatMessage> {
+        if (existing.isEmpty()) {
+            // No local history — use whatever the server has
+            val msgs = mutableListOf<ChatMessage>()
+            if (lastPrompt != null) msgs.add(ChatMessage(content = lastPrompt, isUser = true))
+            if (lastResponse != null) msgs.add(ChatMessage(content = lastResponse, isUser = false))
+            return msgs
+        }
+
+        // Local history exists — check if server has a new response we missed
+        val filtered = existing.filter { !it.isStatus }
+        if (lastResponse != null) {
+            val lastAssistant = filtered.lastOrNull { !it.isUser }
+            if (lastAssistant == null || lastAssistant.content != lastResponse) {
+                // Server has a response we don't have locally — append it
+                return filtered + ChatMessage(content = lastResponse, isUser = false)
+            }
+        }
+        return filtered
     }
 
     private fun autoRenameSession(sessionName: String, context: String) {
