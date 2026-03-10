@@ -138,7 +138,8 @@ fun SessionsScreen(
                                     showProjectDropdown = false
                                 },
                                 leadingIcon = {
-                                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    @Suppress("DEPRECATION")
+                    Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(20.dp))
                                 }
                             )
                             projects.forEach { project ->
