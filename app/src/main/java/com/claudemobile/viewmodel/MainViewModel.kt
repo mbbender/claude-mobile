@@ -61,6 +61,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // Track which sessions are waiting for a response
     private val _waitingSessions = MutableStateFlow<Set<String>>(emptySet())
+    // Sessions actively being polled by waitForResponse (to avoid duplicate reads from background poller)
+    private val activelyPolling = mutableSetOf<String>()
     val waitingSessions: StateFlow<Set<String>> = _waitingSessions.asStateFlow()
 
     // Track session errors
@@ -625,71 +627,76 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     private suspend fun waitForResponse(sessionName: String, dataDir: String = sessionName) {
-        var waited = 0L
-        var lastStatusUpdate = 0L
-        val statusInterval = 90_000L
-        val timeout = 600_000L
-        var statusMsgIndex = 0
+        activelyPolling.add(sessionName)
+        try {
+            var waited = 0L
+            var lastStatusUpdate = 0L
+            val statusInterval = 90_000L
+            val timeout = 600_000L
+            var statusMsgIndex = 0
 
-        while (waited < timeout) {
-            delay(2000)
-            waited += 2000
+            while (waited < timeout) {
+                delay(2000)
+                waited += 2000
 
-            val status = try {
-                ssh.getMobileStatus(dataDir)
-            } catch (e: Exception) {
-                _sessionErrors.value = _sessionErrors.value + (sessionName to "Lost connection to session")
-                _waitingSessions.value = _waitingSessions.value - sessionName
-                return
-            }
-
-            if (status == "ready" && waited > 2500) {
-                val current = _chatMessages.value[sessionName].orEmpty()
-                    .filter { !it.isStatus }
-                val response = ssh.getMobileResponse(dataDir)
-                if (response.isNotBlank()) {
-                    val assistantMsg = ChatMessage(content = response, isUser = false)
-                    val updatedMsgs = current + assistantMsg
-                    _chatMessages.value = _chatMessages.value + (sessionName to updatedMsgs)
-                    persistMessages(sessionName, updatedMsgs)
-                } else {
-                    _chatMessages.value = _chatMessages.value + (sessionName to current)
+                val status = try {
+                    ssh.getMobileStatus(dataDir)
+                } catch (e: Exception) {
+                    _sessionErrors.value = _sessionErrors.value + (sessionName to "Lost connection to session")
+                    _waitingSessions.value = _waitingSessions.value - sessionName
+                    return
                 }
-                val (tokens, cost) = ssh.getMobileTokens(dataDir)
-                if (tokens > 0) _sessionTokens.value = _sessionTokens.value + (sessionName to tokens)
-                if (cost > 0) _sessionCosts.value = _sessionCosts.value + (sessionName to cost)
-                _waitingSessions.value = _waitingSessions.value - sessionName
 
-                saveActiveSessions()
+                if (status == "ready" && waited > 2500) {
+                    val current = _chatMessages.value[sessionName].orEmpty()
+                        .filter { !it.isStatus }
+                    val response = ssh.getMobileResponse(dataDir)
+                    if (response.isNotBlank()) {
+                        val assistantMsg = ChatMessage(content = response, isUser = false)
+                        val updatedMsgs = current + assistantMsg
+                        _chatMessages.value = _chatMessages.value + (sessionName to updatedMsgs)
+                        persistMessages(sessionName, updatedMsgs)
+                    } else {
+                        _chatMessages.value = _chatMessages.value + (sessionName to current)
+                    }
+                    val (tokens, cost) = ssh.getMobileTokens(dataDir)
+                    if (tokens > 0) _sessionTokens.value = _sessionTokens.value + (sessionName to tokens)
+                    if (cost > 0) _sessionCosts.value = _sessionCosts.value + (sessionName to cost)
+                    _waitingSessions.value = _waitingSessions.value - sessionName
 
-                if (sessionName in oneShotSessions) {
-                    oneShotSessions.remove(sessionName)
-                    delay(2000)
-                    archiveSession(sessionName)
+                    saveActiveSessions()
+
+                    if (sessionName in oneShotSessions) {
+                        oneShotSessions.remove(sessionName)
+                        delay(2000)
+                        archiveSession(sessionName)
+                    }
+                    return
                 }
-                return
-            }
 
-            if ((status == "thinking" || status == "pending") && waited - lastStatusUpdate >= statusInterval) {
-                lastStatusUpdate = waited
-                val progress = try { ssh.getMobileProgress(dataDir) } catch (_: Exception) { null }
-                val friendlyMsg = statusMessages[statusMsgIndex % statusMessages.size]
-                statusMsgIndex++
-                val statusText = if (progress != null) "$friendlyMsg\n$progress" else friendlyMsg
-                val elapsed = "${waited / 60000}m ${(waited % 60000) / 1000}s"
+                if ((status == "thinking" || status == "pending") && waited - lastStatusUpdate >= statusInterval) {
+                    lastStatusUpdate = waited
+                    val progress = try { ssh.getMobileProgress(dataDir) } catch (_: Exception) { null }
+                    val friendlyMsg = statusMessages[statusMsgIndex % statusMessages.size]
+                    statusMsgIndex++
+                    val statusText = if (progress != null) "$friendlyMsg\n$progress" else friendlyMsg
+                    val elapsed = "${waited / 60000}m ${(waited % 60000) / 1000}s"
 
-                val current = _chatMessages.value[sessionName].orEmpty()
-                    .filter { !it.isStatus }
-                val statusMsg = ChatMessage(
-                    content = "$statusText ($elapsed)",
-                    isUser = false,
-                    isStatus = true
-                )
-                _chatMessages.value = _chatMessages.value + (sessionName to current + statusMsg)
+                    val current = _chatMessages.value[sessionName].orEmpty()
+                        .filter { !it.isStatus }
+                    val statusMsg = ChatMessage(
+                        content = "$statusText ($elapsed)",
+                        isUser = false,
+                        isStatus = true
+                    )
+                    _chatMessages.value = _chatMessages.value + (sessionName to current + statusMsg)
+                }
             }
+            _sessionErrors.value = _sessionErrors.value + (sessionName to "Response timed out after 10 minutes")
+            _waitingSessions.value = _waitingSessions.value - sessionName
+        } finally {
+            activelyPolling.remove(sessionName)
         }
-        _sessionErrors.value = _sessionErrors.value + (sessionName to "Response timed out after 10 minutes")
-        _waitingSessions.value = _waitingSessions.value - sessionName
     }
 
     private fun autoRenameSession(sessionName: String, context: String) {
@@ -981,8 +988,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     _sessionConnectionStates.value = states
 
-                    // Check if any waiting sessions have finished
-                    val waiting = _waitingSessions.value
+                    // Check if any waiting sessions have finished (skip ones actively polled by waitForResponse)
+                    val waiting = _waitingSessions.value - activelyPolling
                     if (waiting.isNotEmpty()) {
                         for (name in waiting) {
                             val dataDir = dataDirNames[name] ?: name
