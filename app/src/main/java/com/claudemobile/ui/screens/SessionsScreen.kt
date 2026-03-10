@@ -35,6 +35,10 @@ import com.claudemobile.model.Project
 import com.claudemobile.model.SessionConnectionState
 import com.claudemobile.update.UpdateInfo
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -74,7 +78,8 @@ fun SessionsScreen(
     selectedProject: Project? = null,
     onSelectProject: (Project?) -> Unit = {},
     onNewProjectSession: (Project) -> Unit = {},
-    sessionProjectMap: Map<String, String> = emptyMap()
+    sessionProjectMap: Map<String, String> = emptyMap(),
+    sessionTimestamps: Map<String, Long> = emptyMap()
 ) {
     var showNameDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
@@ -303,16 +308,16 @@ fun SessionsScreen(
             }
 
             // Filter sessions by selected project
-            val filteredSessions = if (selectedProject != null) {
+            val filteredSessions = (if (selectedProject != null) {
                 sessions.filter { sessionProjectMap[it.name] == selectedProject.path }
             } else {
                 sessions
-            }
-            val filteredArchived = if (selectedProject != null) {
+            }).sortedByDescending { sessionTimestamps[it.name] ?: 0L }
+            val filteredArchived = (if (selectedProject != null) {
                 archivedSessions.filter { sessionProjectMap[it] == selectedProject.path }
             } else {
                 archivedSessions
-            }
+            }).sortedByDescending { sessionTimestamps[it] ?: 0L }
 
             if (filteredSessions.isEmpty() && filteredArchived.isEmpty() && (selectedProject != null || projects.isEmpty())) {
                 Box(
@@ -392,7 +397,8 @@ fun SessionsScreen(
                                 model = sessionModels[session.name],
                                 isWaiting = session.name in waitingSessions,
                                 hasError = session.name in sessionErrors,
-                                connectionState = connState
+                                connectionState = connState,
+                                timestamp = sessionTimestamps[session.name]
                             )
                         }
                     }
@@ -405,7 +411,7 @@ fun SessionsScreen(
                                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                             )
                         }
-                        items(filteredArchived.toList().reversed(), key = { "archived-$it" }) { name ->
+                        items(filteredArchived, key = { "archived-$it" }) { name ->
                             SwipeToRevealCard(
                                 onDelete = { onDismissArchived(name) },
                                 dismissOnFullSwipe = true
@@ -417,6 +423,7 @@ fun SessionsScreen(
                                     cost = sessionCosts[name],
                                     model = sessionModels[name],
                                     summary = sessionSummaries[name],
+                                    timestamp = sessionTimestamps[name],
                                     onClick = { onArchivedSessionClick(name) }
                                 )
                             }
@@ -557,7 +564,8 @@ private fun SessionCard(
     model: ClaudeModel? = null,
     isWaiting: Boolean = false,
     hasError: Boolean = false,
-    connectionState: SessionConnectionState = SessionConnectionState.CONNECTED
+    connectionState: SessionConnectionState = SessionConnectionState.CONNECTED,
+    timestamp: Long? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
@@ -671,6 +679,13 @@ private fun SessionCard(
                 }
             }
 
+            if (timestamp != null) {
+                Text(
+                    text = formatRelativeTime(timestamp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+            }
         }
     }
 }
@@ -683,6 +698,7 @@ private fun ArchivedSessionCard(
     cost: Double? = null,
     model: ClaudeModel? = null,
     summary: String? = null,
+    timestamp: Long? = null,
     onClick: () -> Unit = {}
 ) {
     Card(
@@ -734,12 +750,13 @@ private fun ArchivedSessionCard(
                     )
                 }
                 val modelTag = model?.displayName ?: "Opus"
+                val timeStr = if (timestamp != null) " · ${formatRelativeTime(timestamp)}" else ""
                 val info = if (tokens != null && tokens > 0) {
                     val formatted = if (tokens >= 1000) "${tokens / 1000}k" else "$tokens"
                     val costStr = if (cost != null && cost > 0) " · $${"%.2f".format(cost)}" else ""
-                    "$modelTag · $formatted tokens$costStr"
+                    "$modelTag · $formatted tokens$costStr$timeStr"
                 } else {
-                    modelTag
+                    "$modelTag$timeStr"
                 }
                 Text(
                     text = info,
@@ -838,6 +855,21 @@ private fun NewSessionDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+private fun formatRelativeTime(timestamp: Long): String {
+    val now = System.currentTimeMillis()
+    val diff = now - timestamp
+    val minutes = TimeUnit.MILLISECONDS.toMinutes(diff)
+    val hours = TimeUnit.MILLISECONDS.toHours(diff)
+    val days = TimeUnit.MILLISECONDS.toDays(diff)
+    return when {
+        minutes < 1 -> "now"
+        minutes < 60 -> "${minutes}m"
+        hours < 24 -> "${hours}h"
+        days < 7 -> "${days}d"
+        else -> SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(timestamp))
+    }
 }
 
 @Composable

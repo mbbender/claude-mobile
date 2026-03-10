@@ -96,6 +96,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _sessionSummaries = MutableStateFlow<Map<String, String>>(emptyMap())
     val sessionSummaries: StateFlow<Map<String, String>> = _sessionSummaries.asStateFlow()
 
+    // Session creation timestamps
+    private val _sessionTimestamps = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val sessionTimestamps: StateFlow<Map<String, Long>> = _sessionTimestamps.asStateFlow()
+
     // Sessions list refresh state
 
     // Per-session connection state (connected/disconnected/reconnecting)
@@ -433,6 +437,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Use sessionId (tmux name) as the key everywhere
         _chatMessages.value = _chatMessages.value + (sessionId to emptyList())
         _sessionModels.value = _sessionModels.value + (sessionId to model)
+        _sessionTimestamps.value = _sessionTimestamps.value + (sessionId to System.currentTimeMillis())
         messageCount[sessionId] = 0
         _currentSession.value = sessionId
         _pendingSessions.value = _pendingSessions.value + sessionId
@@ -481,6 +486,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _displayNames.value = _displayNames.value + (sessionId to displayName)
         _chatMessages.value = _chatMessages.value + (sessionId to emptyList())
         _sessionModels.value = _sessionModels.value + (sessionId to ClaudeModel.OPUS)
+        _sessionTimestamps.value = _sessionTimestamps.value + (sessionId to System.currentTimeMillis())
         messageCount[sessionId] = 0
         sessionProjectDirs[sessionId] = project.path
         _sessionProjects.value = _sessionProjects.value + (sessionId to project.path)
@@ -938,6 +944,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _sessionCosts.value = _sessionCosts.value - sessionName
         _sessionModels.value = _sessionModels.value - sessionName
         _sessionSummaries.value = _sessionSummaries.value - sessionName
+        _sessionTimestamps.value = _sessionTimestamps.value - sessionName
         messageCount.remove(sessionName)
         _displayNames.value = _displayNames.value - sessionName
         saveArchivedSessions()
@@ -1173,6 +1180,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _sessionModels.value[session.name]?.let { root.put("model_${session.name}", it.id) }
                 dataDirNames[session.name]?.let { root.put("datadir_${session.name}", it) }
                 _displayNames.value[session.name]?.let { root.put("displayname_${session.name}", it) }
+                _sessionTimestamps.value[session.name]?.let { root.put("timestamp_${session.name}", it) }
             }
             root.put("names", names)
             prefs.edit().putString("active_sessions", root.toString()).apply()
@@ -1191,6 +1199,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val models = mutableMapOf<String, com.claudemobile.model.ClaudeModel>()
             val connStates = mutableMapOf<String, SessionConnectionState>()
             val loadedDisplayNames = mutableMapOf<String, String>()
+            val timestamps = mutableMapOf<String, Long>()
 
             for (i in 0 until names.length()) {
                 val name = names.getString(i)
@@ -1232,6 +1241,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (root.has("displayname_$name")) {
                     loadedDisplayNames[name] = root.getString("displayname_$name")
                 }
+                if (root.has("timestamp_$name")) {
+                    timestamps[name] = root.getLong("timestamp_$name")
+                }
             }
 
             _sessions.value = sessions
@@ -1241,6 +1253,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _sessionModels.value = _sessionModels.value + models
             _sessionConnectionStates.value = _sessionConnectionStates.value + connStates
             _displayNames.value = _displayNames.value + loadedDisplayNames
+            _sessionTimestamps.value = _sessionTimestamps.value + timestamps
         } catch (_: Exception) {}
     }
 
@@ -1258,6 +1271,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val models = mutableMapOf<String, com.claudemobile.model.ClaudeModel>()
             val summaries = mutableMapOf<String, String>()
             val loadedDisplayNames = mutableMapOf<String, String>()
+            val timestamps = mutableMapOf<String, Long>()
 
             for (i in 0 until names.length()) {
                 val name = names.getString(i)
@@ -1288,6 +1302,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (root.has("displayname_$name")) {
                     loadedDisplayNames[name] = root.getString("displayname_$name")
                 }
+                if (root.has("timestamp_$name")) {
+                    timestamps[name] = root.getLong("timestamp_$name")
+                }
             }
 
             _archivedSessions.value = archived
@@ -1297,6 +1314,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _sessionModels.value = _sessionModels.value + models
             _sessionSummaries.value = _sessionSummaries.value + summaries
             _displayNames.value = _displayNames.value + loadedDisplayNames
+            _sessionTimestamps.value = _sessionTimestamps.value + timestamps
         } catch (_: Exception) {}
     }
 
@@ -1328,6 +1346,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _sessionModels.value[name]?.let { root.put("model_$name", it.id) }
                 _sessionSummaries.value[name]?.let { root.put("summary_$name", it) }
                 _displayNames.value[name]?.let { root.put("displayname_$name", it) }
+                _sessionTimestamps.value[name]?.let { root.put("timestamp_$name", it) }
             }
             root.put("names", names)
             prefs.edit().putString("archived_sessions", root.toString()).apply()

@@ -89,6 +89,7 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
     val projects by viewModel.projects.collectAsState()
     val selectedProject by viewModel.selectedProject.collectAsState()
     val sessionProjectMap by viewModel.sessionProjects.collectAsState()
+    val sessionTimestamps by viewModel.sessionTimestamps.collectAsState()
     val pendingImageUri by viewModel.pendingImageUri.collectAsState()
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -232,7 +233,8 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                     selectedProject = selectedProject,
                     onSelectProject = viewModel::selectProject,
                     onNewProjectSession = viewModel::createProjectSession,
-                    sessionProjectMap = sessionProjectMap
+                    sessionProjectMap = sessionProjectMap,
+                    sessionTimestamps = sessionTimestamps
                 )
             }
         }
