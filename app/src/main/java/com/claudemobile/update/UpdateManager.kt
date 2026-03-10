@@ -42,7 +42,7 @@ class UpdateManager(private val context: Context, private val scope: CoroutineSc
             val prefs = context.getSharedPreferences("update_prefs", Context.MODE_PRIVATE)
             val baseUrl = prefs.getString(VERSION_URL_KEY, null)
             return if (baseUrl != null) "$baseUrl$DEFAULT_VERSION_PATH"
-            else "http://localhost:8888$DEFAULT_VERSION_PATH"
+            else "${com.claudemobile.BuildConfig.UPDATE_SERVER_URL}$DEFAULT_VERSION_PATH"
         }
 
         fun setUpdateServer(context: Context, url: String) {
@@ -81,7 +81,10 @@ class UpdateManager(private val context: Context, private val scope: CoroutineSc
     }
 
     fun downloadAndInstall(update: UpdateInfo, onComplete: () -> Unit = {}) {
-        // Clean up old downloads
+        startDownload(update, onComplete, retriesLeft = 1)
+    }
+
+    private fun startDownload(update: UpdateInfo, onComplete: () -> Unit, retriesLeft: Int) {
         val apkFile = File(
             context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
             APK_FILENAME
@@ -103,7 +106,7 @@ class UpdateManager(private val context: Context, private val scope: CoroutineSc
 
         _downloadProgress.value = 0f
 
-        // Poll download progress
+        // Poll download progress and auto-retry on failure
         scope.launch(Dispatchers.IO) {
             var done = false
             while (!done) {
@@ -111,9 +114,17 @@ class UpdateManager(private val context: Context, private val scope: CoroutineSc
                 dm.query(query)?.use { cursor ->
                     if (cursor.moveToFirst()) {
                         val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                        if (status == DownloadManager.STATUS_SUCCESSFUL || status == DownloadManager.STATUS_FAILED) {
+                        if (status == DownloadManager.STATUS_SUCCESSFUL) {
                             done = true
-                            _downloadProgress.value = if (status == DownloadManager.STATUS_SUCCESSFUL) 1f else -1f
+                            _downloadProgress.value = 1f
+                        } else if (status == DownloadManager.STATUS_FAILED) {
+                            done = true
+                            if (retriesLeft > 0) {
+                                delay(500)
+                                startDownload(update, onComplete, retriesLeft - 1)
+                            } else {
+                                _downloadProgress.value = -1f
+                            }
                         } else {
                             val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
                             val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))

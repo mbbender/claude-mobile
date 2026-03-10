@@ -3,6 +3,7 @@ package com.claudemobile.viewmodel
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import com.claudemobile.BuildConfig
 import androidx.lifecycle.viewModelScope
@@ -116,6 +117,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // Map display name → original data directory name (for file-based protocol paths)
     private val dataDirNames = mutableMapOf<String, String>()
+
+    // Pending image attachment
+    private val _pendingImageUri = MutableStateFlow<Uri?>(null)
+    val pendingImageUri: StateFlow<Uri?> = _pendingImageUri.asStateFlow()
 
     private var pollJob: Job? = null
     private var reconnectJob: Job? = null
@@ -516,7 +521,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val count = messageCount[sessionName] ?: 0
-                val intent = if (count == 0) parseMessageIntent(message) else MessageIntent(message, null, false)
+                val hasImage = _pendingImageUri.value != null
+                val effectiveMessage = if (message.isBlank() && hasImage) "See the attached image." else message
+                val intent = if (count == 0) parseMessageIntent(effectiveMessage) else MessageIntent(effectiveMessage, null, false)
                 val actualMessage = intent.cleanMessage
 
                 // Handle model override on first message
@@ -535,8 +542,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     oneShotSessions.add(sessionName)
                 }
 
+                // Handle image attachment
+                val imageUri = _pendingImageUri.value
+                var imageFileName: String? = null
+                if (imageUri != null) {
+                    val timestamp = System.currentTimeMillis()
+                    val ext = appContext.contentResolver.getType(imageUri)?.let {
+                        when {
+                            it.contains("png") -> "png"
+                            it.contains("webp") -> "webp"
+                            else -> "jpg"
+                        }
+                    } ?: "jpg"
+                    imageFileName = "img_${timestamp}.$ext"
+                }
+
                 val current = _chatMessages.value[sessionName].orEmpty()
-                val newMsg = ChatMessage(content = message, isUser = true)
+                val newMsg = ChatMessage(
+                    content = message,
+                    isUser = true,
+                    imageUri = imageUri?.toString(),
+                    imageName = imageFileName
+                )
                 val updated = current + newMsg
                 _chatMessages.value = _chatMessages.value + (sessionName to updated)
                 persistMessages(sessionName, updated)
@@ -548,7 +575,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     dataDir = ssh.resolveDataDir(sessionName)
                     dataDirNames[sessionName] = dataDir
                 }
-                ssh.sendMobileMessage(dataDir, actualMessage)
+
+                // Upload image if attached
+                if (imageUri != null && imageFileName != null) {
+                    val dir = "/tmp/claude-mobile/$dataDir"
+                    ssh.exec("mkdir -p '$dir/images'")
+                    appContext.contentResolver.openInputStream(imageUri)?.use { stream ->
+                        ssh.uploadFile(stream, "$dir/images/$imageFileName")
+                    }
+                    _pendingImageUri.value = null
+                }
+
+                ssh.sendMobileMessage(dataDir, actualMessage, imageFileName)
                 _waitingSessions.value = _waitingSessions.value + sessionName
                 _sessionErrors.value = _sessionErrors.value - sessionName
 
@@ -565,6 +603,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _waitingSessions.value = _waitingSessions.value - sessionName
             }
         }
+    }
+
+    fun setPendingImage(uri: Uri?) {
+        _pendingImageUri.value = uri
+    }
+
+    fun clearPendingImage() {
+        _pendingImageUri.value = null
     }
 
     private val statusMessages = listOf(
@@ -1080,7 +1126,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         chatMsgs.add(ChatMessage(
                             content = m.getString("content"),
                             isUser = m.getBoolean("isUser"),
-                            timestamp = m.optLong("timestamp", System.currentTimeMillis())
+                            timestamp = m.optLong("timestamp", System.currentTimeMillis()),
+                            imageUri = if (m.has("imageUri")) m.getString("imageUri") else null,
+                            imageName = if (m.has("imageName")) m.getString("imageName") else null
                         ))
                     }
                     msgs[name] = chatMsgs
@@ -1134,7 +1182,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         chatMsgs.add(ChatMessage(
                             content = m.getString("content"),
                             isUser = m.getBoolean("isUser"),
-                            timestamp = m.optLong("timestamp", System.currentTimeMillis())
+                            timestamp = m.optLong("timestamp", System.currentTimeMillis()),
+                            imageUri = if (m.has("imageUri")) m.getString("imageUri") else null,
+                            imageName = if (m.has("imageName")) m.getString("imageName") else null
                         ))
                     }
                     msgs[name] = chatMsgs
@@ -1215,6 +1265,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     obj.put("content", msg.content)
                     obj.put("isUser", msg.isUser)
                     obj.put("timestamp", msg.timestamp)
+                    if (msg.imageUri != null) obj.put("imageUri", msg.imageUri)
+                    if (msg.imageName != null) obj.put("imageName", msg.imageName)
                     arr.put(obj)
                 }
                 val wrapper = JSONObject()

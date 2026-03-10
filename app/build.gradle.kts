@@ -17,6 +17,11 @@ val gitShortHash: String = providers.exec {
     commandLine("git", "rev-parse", "--short", "HEAD")
 }.standardOutput.asText.get().trim()
 
+val tailscaleIp: String = providers.exec {
+    commandLine("sh", "-c", "ifconfig | grep -A1 utun | grep 'inet ' | awk '{print \$2}' | head -1")
+    isIgnoreExitValue = true
+}.standardOutput.asText.get().trim()
+
 android {
     namespace = "com.claudemobile"
     compileSdk = 35
@@ -25,15 +30,12 @@ android {
         applicationId = "com.claudemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 89
-        versionName = "2.73"
+        versionCode = 97
+        versionName = "2.81"
 
-        val buildLabel = if (gitTag.isNotEmpty()) {
-            gitTag
-        } else {
-            "$gitBranch-$versionName-$gitShortHash"
-        }
+        val buildLabel = "$gitBranch-$versionName-$gitShortHash"
         buildConfigField("String", "BUILD_LABEL", "\"$buildLabel\"")
+        buildConfigField("String", "UPDATE_SERVER_URL", "\"http://${tailscaleIp.ifEmpty { "localhost" }}:8888\"")
     }
 
     buildTypes {
@@ -71,5 +73,6 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("io.coil-kt:coil-compose:2.6.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

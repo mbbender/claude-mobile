@@ -4,8 +4,11 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.*
@@ -83,6 +86,13 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
     val pendingSessions by viewModel.pendingSessions.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
     val displayNames by viewModel.displayNames.collectAsState()
+    val pendingImageUri by viewModel.pendingImageUri.collectAsState()
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        uri?.let { viewModel.setPendingImage(it) }
+    }
 
     val activity = LocalContext.current as FragmentActivity
     val biometric = viewModel.biometric
@@ -172,7 +182,14 @@ fun ClaudeMobileApp(viewModel: MainViewModel = viewModel()) {
                     model = sessionModels[session],
                     readOnly = session in archivedSessions,
                     isPending = session in pendingSessions,
+                    pendingImageUri = pendingImageUri,
                     onSendMessage = { viewModel.sendMessage(session, it) },
+                    onAttachImage = {
+                        imagePickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    onClearImage = { viewModel.clearPendingImage() },
                     onBack = { viewModel.clearCurrentSession() }
                 )
             }

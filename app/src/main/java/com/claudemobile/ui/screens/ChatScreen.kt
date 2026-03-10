@@ -1,5 +1,6 @@
 package com.claudemobile.ui.screens
 
+import android.net.Uri
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -15,12 +16,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -36,6 +41,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.claudemobile.model.ChatMessage
 import com.claudemobile.model.ClaudeModel
 
@@ -50,7 +56,10 @@ fun ChatScreen(
     model: ClaudeModel? = null,
     readOnly: Boolean = false,
     isPending: Boolean = false,
+    pendingImageUri: Uri? = null,
     onSendMessage: (String) -> Unit,
+    onAttachImage: () -> Unit = {},
+    onClearImage: () -> Unit = {},
     onBack: () -> Unit
 ) {
     var input by remember { mutableStateOf("") }
@@ -90,42 +99,89 @@ fun ChatScreen(
                     tonalElevation = 3.dp,
                     shadowElevation = 8.dp
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp)
-                            .imePadding(),
-                        verticalAlignment = Alignment.Bottom
+                            .imePadding()
                     ) {
-                        OutlinedTextField(
-                            value = input,
-                            onValueChange = { input = it },
-                            modifier = Modifier.weight(1f),
-                            placeholder = { Text("Message Claude...") },
-                            maxLines = 5,
-                            shape = RoundedCornerShape(24.dp),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                            keyboardActions = KeyboardActions(
-                                onSend = {
-                                    if (input.isNotBlank()) {
+                        // Image preview
+                        if (pendingImageUri != null) {
+                            Box(
+                                modifier = Modifier
+                                    .padding(start = 12.dp, end = 12.dp, top = 8.dp)
+                            ) {
+                                AsyncImage(
+                                    model = pendingImageUri,
+                                    contentDescription = "Attached image",
+                                    modifier = Modifier
+                                        .height(80.dp)
+                                        .clip(RoundedCornerShape(12.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                                FilledIconButton(
+                                    onClick = onClearImage,
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .align(Alignment.TopEnd),
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.errorContainer
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove",
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.Bottom
+                        ) {
+                            IconButton(
+                                onClick = onAttachImage,
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Image,
+                                    contentDescription = "Attach image",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            OutlinedTextField(
+                                value = input,
+                                onValueChange = { input = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("Message Claude...") },
+                                maxLines = 5,
+                                shape = RoundedCornerShape(24.dp),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(
+                                    onSend = {
+                                        if (input.isNotBlank() || pendingImageUri != null) {
+                                            onSendMessage(input.trim())
+                                            input = ""
+                                        }
+                                    }
+                                )
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            FilledIconButton(
+                                onClick = {
+                                    if (input.isNotBlank() || pendingImageUri != null) {
                                         onSendMessage(input.trim())
                                         input = ""
                                     }
-                                }
-                            )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        FilledIconButton(
-                            onClick = {
-                                if (input.isNotBlank()) {
-                                    onSendMessage(input.trim())
-                                    input = ""
-                                }
-                            },
-                            enabled = input.isNotBlank(),
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                                },
+                                enabled = input.isNotBlank() || pendingImageUri != null,
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                            }
                         }
                     }
                 }
@@ -350,14 +406,32 @@ private fun ChatBubble(message: ChatMessage) {
                     style = MaterialTheme.typography.bodyMedium
                 )
             } else {
-                Text(
-                    text = styledText,
-                    color = textColor,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = if (!isUser) 13.sp else 14.sp,
-                        lineHeight = 20.sp
-                    )
-                )
+                Column {
+                    if (message.imageUri != null) {
+                        AsyncImage(
+                            model = Uri.parse(message.imageUri),
+                            contentDescription = "Attached image",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Fit
+                        )
+                        if (message.content.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
+                    if (message.content.isNotBlank()) {
+                        Text(
+                            text = styledText,
+                            color = textColor,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = if (!isUser) 13.sp else 14.sp,
+                                lineHeight = 20.sp
+                            )
+                        )
+                    }
+                }
             }
         }
 

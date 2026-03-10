@@ -56,8 +56,15 @@ if ! lsof -i :8888 >/dev/null 2>&1; then
     cd "$SERVE_DIR"
     python3 -c "
 import http.server, socketserver
-handler = http.server.SimpleHTTPRequestHandler
-with socketserver.TCPServer(('0.0.0.0', 8888), handler) as httpd:
+class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        super().end_headers()
+class ThreadedServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
+with ThreadedServer(('0.0.0.0', 8888), NoCacheHandler) as httpd:
     httpd.serve_forever()
 " &
     disown

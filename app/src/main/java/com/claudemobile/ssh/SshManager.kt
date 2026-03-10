@@ -4,6 +4,7 @@ import com.claudemobile.model.ClaudeModel
 import com.claudemobile.model.ClaudeSession
 import com.claudemobile.model.SshConfig
 import com.jcraft.jsch.ChannelExec
+import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.Properties
 
 private fun shellEscape(s: String): String {
@@ -168,6 +170,13 @@ while true; do
   rm -f "${d}DIR/pending"
   echo "${d}PROMPT" > "${d}DIR/last_prompt"
   echo 'thinking' > "${d}DIR/status"
+  # Check for image attachment — prepend image path so Claude reads it
+  if [ -f "${d}DIR/image" ]; then
+    IMG_NAME="${d}(cat "${d}DIR/image")"
+    PROMPT="[The user attached an image: ${d}DIR/images/${d}IMG_NAME — Read this image file first before responding.]
+${d}PROMPT"
+    rm -f "${d}DIR/image"
+  fi
   if [ "${d}FIRST" = true ]; then
     claude -p "${d}PROMPT" --model "${d}MODEL" --dangerously-skip-permissions --output-format json > "${d}DIR/raw_response" 2>"${d}DIR/progress"
     FIRST=false
@@ -246,6 +255,13 @@ while true; do
   rm -f "${d}DIR/pending"
   echo "${d}PROMPT" > "${d}DIR/last_prompt"
   echo 'thinking' > "${d}DIR/status"
+  # Check for image attachment — prepend image path so Claude reads it
+  if [ -f "${d}DIR/image" ]; then
+    IMG_NAME="${d}(cat "${d}DIR/image")"
+    PROMPT="[The user attached an image: ${d}DIR/images/${d}IMG_NAME — Read this image file first before responding.]
+${d}PROMPT"
+    rm -f "${d}DIR/image"
+  fi
   claude -p "${d}PROMPT" --continue --model "${d}MODEL" --dangerously-skip-permissions --output-format json > "${d}DIR/raw_response" 2>"${d}DIR/progress"
   if jq -e '.result' "${d}DIR/raw_response" > /dev/null 2>&1; then
     jq -r '.result // empty' "${d}DIR/raw_response" > "${d}DIR/response"
@@ -300,12 +316,30 @@ WORKEREOF""")
         ReconnectResult(dataDir, lastResponse, lastPrompt, isThinking, tokens, cost, model)
     }
 
-    suspend fun sendMobileMessage(sessionName: String, message: String) = withContext(Dispatchers.IO) {
+    suspend fun sendMobileMessage(sessionName: String, message: String, imageFileName: String? = null) = withContext(Dispatchers.IO) {
         val dir = "/tmp/claude-mobile/$sessionName"
         val escaped = message.replace("'", "'\\''")
         // Clear old response and set status to "pending" BEFORE writing pending file
         // This closes the race window where status is still "ready" from the previous turn
-        exec("rm -f '$dir/response' '$dir/raw_response'; echo 'pending' > '$dir/status'; echo '$escaped' > '$dir/pending'")
+        if (imageFileName != null) {
+            exec("rm -f '$dir/response' '$dir/raw_response'; echo '$imageFileName' > '$dir/image'; echo 'pending' > '$dir/status'; echo '$escaped' > '$dir/pending'")
+        } else {
+            exec("rm -f '$dir/response' '$dir/raw_response' '$dir/image'; echo 'pending' > '$dir/status'; echo '$escaped' > '$dir/pending'")
+        }
+    }
+
+    suspend fun uploadFile(inputStream: InputStream, remotePath: String) = withContext(Dispatchers.IO) {
+        execMutex.withLock {
+            ensureConnected()
+            val s = session ?: throw IllegalStateException("Not connected")
+            val channel = s.openChannel("sftp") as ChannelSftp
+            channel.connect(15_000)
+            try {
+                channel.put(inputStream, remotePath)
+            } finally {
+                channel.disconnect()
+            }
+        }
     }
 
     suspend fun resolveDataDir(sessionName: String): String = withContext(Dispatchers.IO) {

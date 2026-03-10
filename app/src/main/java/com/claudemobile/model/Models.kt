@@ -37,7 +37,9 @@ data class ChatMessage(
     val content: String,
     val isUser: Boolean,
     val isStatus: Boolean = false,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val imageUri: String? = null,
+    val imageName: String? = null
 )
 
 enum class ConnectionState {
