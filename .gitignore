@@ -14,6 +14,9 @@ local.properties
 # OS
 .DS_Store
 
+# Local Claude Mobile session workspaces
+sessions/
+
 # APK files
 *.apk
 *.aab

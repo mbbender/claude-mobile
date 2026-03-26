@@ -42,6 +42,11 @@ data class ChatMessage(
     val imageName: String? = null
 )
 
+data class Project(
+    val name: String,
+    val path: String
+)
+
 enum class ConnectionState {
     DISCONNECTED,
     CONNECTING,

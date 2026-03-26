@@ -2,6 +2,7 @@ package com.claudemobile.ssh
 
 import com.claudemobile.model.ClaudeModel
 import com.claudemobile.model.ClaudeSession
+import com.claudemobile.model.Project
 import com.claudemobile.model.SshConfig
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.ChannelSftp
@@ -147,9 +148,9 @@ Rules:
 MEOF""")
     }
 
-    suspend fun setupMobileSession(sessionName: String, model: ClaudeModel = ClaudeModel.OPUS) = withContext(Dispatchers.IO) {
+    suspend fun setupMobileSession(sessionName: String, model: ClaudeModel = ClaudeModel.OPUS, projectDir: String? = null) = withContext(Dispatchers.IO) {
         val dir = "/tmp/claude-mobile/$sessionName"
-        val workDir = "~/Claude/claude-mobile/sessions/$sessionName"
+        val workDir = projectDir ?: "~/Claude/claude-mobile/sessions/$sessionName"
         exec("mkdir -p '$dir'")
         exec("echo 'ready' > '$dir/status'")
         exec("echo '${model.id}' > '$dir/model'")
@@ -424,11 +425,29 @@ WORKEREOF""")
         exec("rm -f '/tmp/claude-$dataDir.log' 2>/dev/null")
     }
 
-    suspend fun startInteractiveSession(name: String, model: ClaudeModel = ClaudeModel.OPUS): String = withContext(Dispatchers.IO) {
+    suspend fun startInteractiveSession(name: String, model: ClaudeModel = ClaudeModel.OPUS, projectDir: String? = null): String = withContext(Dispatchers.IO) {
         val sanitizedName = name.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        ensureMobileWorkspace(sanitizedName)
-        setupMobileSession(sanitizedName, model)
+        if (projectDir == null) {
+            ensureMobileWorkspace(sanitizedName)
+        }
+        setupMobileSession(sanitizedName, model, projectDir)
         sanitizedName
+    }
+
+    suspend fun listProjects(): List<Project> = withContext(Dispatchers.IO) {
+        try {
+            // Find directories with CLAUDE.md up to 3 levels deep in common dev locations
+            val raw = exec("""find ~/Claude ~/Projects ~/repos ~/src ~/code ~/work ~ -maxdepth 3 -name 'CLAUDE.md' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/claude-mobile/sessions/*' 2>/dev/null | head -20 | while read f; do dirname "${'$'}f"; done | sort -u""")
+            raw.lines()
+                .filter { it.isNotBlank() }
+                .map { path ->
+                    val name = path.trimEnd('/').substringAfterLast('/')
+                    Project(name = name, path = path.trim())
+                }
+                .distinctBy { it.path }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     suspend fun getSessionModel(sessionName: String): ClaudeModel = withContext(Dispatchers.IO) {

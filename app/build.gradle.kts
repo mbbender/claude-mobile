@@ -30,8 +30,8 @@ android {
         applicationId = "com.claudemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 97
-        versionName = "2.81"
+        versionCode = 105
+        versionName = "2.89"
 
         val buildLabel = "$gitBranch-$versionName-$gitShortHash"
         buildConfigField("String", "BUILD_LABEL", "\"$buildLabel\"")
